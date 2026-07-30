@@ -91,7 +91,7 @@ function convertToBase(qty, unit) {
   return qty * unit.toBase;
 }
 
-function Gauge({ pct, danger }) {
+function StockGauge({ pct, danger }) {
   const clamped = Math.max(0, Math.min(100, pct));
   const color = danger ? COLORS.alert : clamped < 40 ? COLORS.crimson : COLORS.success;
   return (
@@ -489,7 +489,7 @@ function Dashboard({ data, unitById, role }) {
           const danger = rm.stock <= rm.minAlert;
           return (
             <div key={rm.id} style={{ background: COLORS.panel, border: `1px solid ${danger ? COLORS.alert : COLORS.border}`, borderRadius: 10, padding: 14, display: "flex", gap: 12, alignItems: "center" }}>
-              <Gauge pct={pct} danger={danger} />
+              <StockGauge pct={pct} danger={danger} />
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{rm.name}</div>
                 <div style={{ fontFamily: "JetBrains Mono", fontSize: 13, color: COLORS.ink, marginTop: 2 }}>
