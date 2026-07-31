@@ -444,8 +444,54 @@ function Dashboard({ data, unitById, role }) {
   (data.sales || []).forEach((s) => s.items.forEach((it) => { bestSellerMap[it.name] = (bestSellerMap[it.name] || 0) + it.qty; }));
   const bestSellerData = Object.entries(bestSellerMap).sort(([, a], [, b]) => b - a).slice(0, 6).map(([name, qty]) => ({ name, qty }));
 
+  function costPerBaseUnit(rm) {
+    const purchaseUnit = unitById(rm.purchaseUnitId);
+    return purchaseUnit && purchaseUnit.toBase ? (rm.lastPrice || 0) / purchaseUnit.toBase : 0;
+  }
+  function latestHppPerUnit(recipeId) {
+    const batches = (data.batches || []).filter((b) => b.recipeId === recipeId && b.status === "completed" && b.hppPerUnit != null);
+    if (batches.length === 0) return 0;
+    return batches.sort((a, b) => new Date(b.finishedAt) - new Date(a.finishedAt))[0].hppPerUnit;
+  }
+
+  const stockValueRaw = data.rawMaterials.reduce((sum, rm) => sum + rm.stock * costPerBaseUnit(rm), 0);
+  const stockValueFinished = data.recipes.reduce((sum, r) => sum + (r.finishedStock || 0) * latestHppPerUnit(r.id), 0);
+  const totalStockValue = stockValueRaw + stockValueFinished;
+
+  const totalRejectLoss = (data.batches || [])
+    .filter((b) => b.status === "completed")
+    .reduce((sum, b) => sum + (b.rejectQty || 0) * (b.hppPerUnit || 0), 0);
+
+  const totalRevenue = (data.sales || []).reduce((sum, s) => sum + s.total, 0);
+  const totalCOGS = (data.sales || []).reduce((sum, s) => sum + s.items.reduce((isum, it) => isum + it.qty * latestHppPerUnit(it.recipeId), 0), 0);
+  const labaRugi = totalRevenue - totalCOGS;
+
   return (
     <div>
+      {showAnalytics && (
+        <>
+          <SectionTitle>Ringkasan Keuangan</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 22 }}>
+            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Laba Rugi (estimasi)</div>
+              <div style={{ fontFamily: "JetBrains Mono", fontSize: 20, fontWeight: 600, color: labaRugi >= 0 ? COLORS.success : COLORS.alert }}>
+                {labaRugi < 0 ? "-" : ""}Rp{Math.abs(Math.round(labaRugi)).toLocaleString("id-ID")}
+              </div>
+              <div style={{ fontSize: 10.5, color: COLORS.muted, marginTop: 3 }}>Penjualan − estimasi HPP terjual</div>
+            </div>
+            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Total Nilai Stok</div>
+              <div style={{ fontFamily: "JetBrains Mono", fontSize: 20, fontWeight: 600, color: COLORS.ink }}>Rp{Math.round(totalStockValue).toLocaleString("id-ID")}</div>
+              <div style={{ fontSize: 10.5, color: COLORS.muted, marginTop: 3 }}>Bahan baku Rp{Math.round(stockValueRaw).toLocaleString("id-ID")} · Produk jadi Rp{Math.round(stockValueFinished).toLocaleString("id-ID")}</div>
+            </div>
+            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Kerugian Reject Produksi</div>
+              <div style={{ fontFamily: "JetBrains Mono", fontSize: 20, fontWeight: 600, color: COLORS.alert }}>Rp{Math.round(totalRejectLoss).toLocaleString("id-ID")}</div>
+              <div style={{ fontSize: 10.5, color: COLORS.muted, marginTop: 3 }}>Total biaya bahan baku dari unit gagal/reject</div>
+            </div>
+          </div>
+        </>
+      )}
       {showAnalytics && (
         <>
           <SectionTitle>Grafik Penjualan</SectionTitle>
@@ -1079,27 +1125,37 @@ function OpnamePanel({ data, setData, unitById, role, logAction, showToast }) {
 
 function PosPanel({ data, setData, role, logAction, showToast }) {
   const [cart, setCart] = useState({}); // recipeId -> qty
+  const [customerName, setCustomerName] = useState("");
+  const [discountAmount, setDiscountAmount] = useState("");
+  const [taxPercent, setTaxPercent] = useState("");
 
   const sellable = data.recipes.filter((r) => (r.finishedStock || 0) > 0 || (cart[r.id] || 0) > 0);
   const cartItems = Object.entries(cart).filter(([, q]) => q > 0);
-  const total = cartItems.reduce((sum, [rid, q]) => {
+  const subtotal = cartItems.reduce((sum, [rid, q]) => {
     const r = data.recipes.find((x) => x.id === rid);
     return sum + (r?.sellPrice || 0) * q;
   }, 0);
+  const discount = Math.min(parseFloat(discountAmount) || 0, subtotal);
+  const afterDiscount = subtotal - discount;
+  const taxPct = parseFloat(taxPercent) || 0;
+  const taxAmount = Math.round(afterDiscount * (taxPct / 100));
+  const total = afterDiscount + taxAmount;
 
-  function addToCart(r) {
-    const current = cart[r.id] || 0;
-    if (current + 1 > (r.finishedStock || 0)) return showToast("Stok produk jadi tidak cukup", true);
-    setCart({ ...cart, [r.id]: current + 1 });
-  }
-  function removeFromCart(r) {
-    const current = cart[r.id] || 0;
-    if (current <= 1) {
+  function setQty(r, qty) {
+    const clamped = Math.max(0, Math.min(qty, r.finishedStock || 0));
+    if (qty > (r.finishedStock || 0)) showToast("Stok produk jadi tidak cukup, jumlah disesuaikan ke stok tersedia", true);
+    if (clamped === 0) {
       const { [r.id]: _, ...rest } = cart;
       setCart(rest);
     } else {
-      setCart({ ...cart, [r.id]: current - 1 });
+      setCart({ ...cart, [r.id]: clamped });
     }
+  }
+  function addToCart(r) {
+    setQty(r, (cart[r.id] || 0) + 1);
+  }
+  function removeFromCart(r) {
+    setQty(r, (cart[r.id] || 0) - 1);
   }
 
   function checkout() {
@@ -1112,9 +1168,29 @@ function PosPanel({ data, setData, role, logAction, showToast }) {
       const bought = cart[r.id];
       return bought ? { ...r, finishedStock: (r.finishedStock || 0) - bought } : r;
     });
-    const sale = { id: uid("sale"), transactionNumber: "TRX-" + Date.now().toString().slice(-8), items, total, cashier: role, createdAt: new Date().toISOString() };
-    setData({ ...data, recipes: updatedRecipes, sales: [sale, ...(data.sales || [])], auditLog: [logAction("Transaksi POS", `${sale.transactionNumber} · Rp${total.toLocaleString("id-ID")}`), ...(data.auditLog || [])].slice(0, 200) });
+    const sale = {
+      id: uid("sale"),
+      transactionNumber: "TRX-" + Date.now().toString().slice(-8),
+      customerName: customerName.trim() || null,
+      items,
+      subtotal,
+      discountAmount: discount,
+      taxPercent: taxPct,
+      taxAmount,
+      total,
+      cashier: role,
+      createdAt: new Date().toISOString(),
+    };
+    setData({
+      ...data,
+      recipes: updatedRecipes,
+      sales: [sale, ...(data.sales || [])],
+      auditLog: [logAction("Transaksi POS", `${sale.transactionNumber} · Rp${total.toLocaleString("id-ID")}${sale.customerName ? " · " + sale.customerName : ""}`), ...(data.auditLog || [])].slice(0, 200),
+    });
     setCart({});
+    setCustomerName("");
+    setDiscountAmount("");
+    setTaxPercent("");
     showToast("Transaksi berhasil: Rp" + total.toLocaleString("id-ID"));
   }
 
@@ -1128,9 +1204,14 @@ function PosPanel({ data, setData, role, logAction, showToast }) {
               <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 15 }}>{r.name}</div>
               <div style={{ fontFamily: "JetBrains Mono", fontSize: 14, color: COLORS.crimson, marginTop: 4 }}>Rp{(r.sellPrice || 0).toLocaleString("id-ID")}</div>
               <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>Stok: {r.finishedStock || 0}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
                 <button onClick={() => removeFromCart(r)} style={{ ...btnGhost, padding: "4px 8px" }}><Minus size={13} /></button>
-                <span style={{ fontFamily: "JetBrains Mono", fontSize: 14, minWidth: 18, textAlign: "center" }}>{cart[r.id] || 0}</span>
+                <input
+                  type="number"
+                  value={cart[r.id] || 0}
+                  onChange={(e) => setQty(r, parseInt(e.target.value, 10) || 0)}
+                  style={{ ...inputStyle, width: 48, textAlign: "center", padding: "4px 4px", fontFamily: "JetBrains Mono", fontSize: 14 }}
+                />
                 <button onClick={() => addToCart(r)} style={{ ...btnGhost, padding: "4px 8px" }}><Plus size={13} /></button>
               </div>
             </div>
@@ -1140,10 +1221,15 @@ function PosPanel({ data, setData, role, logAction, showToast }) {
 
         <div style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, position: "sticky", top: 0 }}>
           <div style={{ fontFamily: "Anton", fontWeight: 700, fontSize: 16, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><ShoppingCart size={16} />Keranjang</div>
+
+          <Field label="Nama pelanggan (opsional)">
+            <input style={inputStyle} value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="mis. Budi" />
+          </Field>
+
           {cartItems.length === 0 ? (
-            <div style={{ fontSize: 12, color: COLORS.muted }}>Belum ada item.</div>
+            <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 12 }}>Belum ada item.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12, marginBottom: 12 }}>
               {cartItems.map(([rid, q]) => {
                 const r = data.recipes.find((x) => x.id === rid);
                 return (
@@ -1155,7 +1241,22 @@ function PosPanel({ data, setData, role, logAction, showToast }) {
               })}
             </div>
           )}
-          <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 10, display: "flex", justifyContent: "space-between", fontFamily: "Anton", fontWeight: 700, fontSize: 17 }}>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <Field label="Diskon (Rp, opsional)">
+              <input type="number" style={{ ...inputStyle, width: "100%" }} value={discountAmount} onChange={(e) => setDiscountAmount(e.target.value)} placeholder="0" />
+            </Field>
+            <Field label="PPN (%, opsional)">
+              <input type="number" style={{ ...inputStyle, width: "100%" }} value={taxPercent} onChange={(e) => setTaxPercent(e.target.value)} placeholder="0" />
+            </Field>
+          </div>
+
+          <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, color: COLORS.muted }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><span style={{ fontFamily: "JetBrains Mono" }}>Rp{subtotal.toLocaleString("id-ID")}</span></div>
+            {discount > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>Diskon</span><span style={{ fontFamily: "JetBrains Mono" }}>-Rp{discount.toLocaleString("id-ID")}</span></div>}
+            {taxAmount > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>PPN ({taxPct}%)</span><span style={{ fontFamily: "JetBrains Mono" }}>+Rp{taxAmount.toLocaleString("id-ID")}</span></div>}
+          </div>
+          <div style={{ paddingTop: 8, display: "flex", justifyContent: "space-between", fontFamily: "Anton", fontWeight: 700, fontSize: 17 }}>
             <span>Total</span>
             <span style={{ color: COLORS.crimson, fontFamily: "JetBrains Mono" }}>Rp{total.toLocaleString("id-ID")}</span>
           </div>
