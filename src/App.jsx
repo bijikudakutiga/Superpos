@@ -1,7 +1,59 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Package, Beaker, Truck, ChefHat, Gauge, Plus, Trash2, X, Save, AlertTriangle, CheckCircle2, RotateCcw, Factory, ClipboardList, ShieldCheck, Check, XCircle, ShoppingCart, Settings, Minus } from "lucide-react";
+import { Package, Beaker, Truck, ChefHat, Gauge, Plus, Trash2, X, Save, AlertTriangle, CheckCircle2, RotateCcw, Factory, ClipboardList, ShieldCheck, Check, XCircle, ShoppingCart, Settings, Minus, Wallet, Download, Calculator, CalendarDays, ArrowDownCircle, ArrowUpCircle } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { supabase } from "./supabaseClient";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+
+function exportExcel(filename, rows) {
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Data");
+  XLSX.writeFile(wb, filename + ".xlsx");
+}
+
+function exportPDF(filename, title, rows) {
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text(title, 14, 16);
+  const columns = rows.length ? Object.keys(rows[0]) : [];
+  autoTable(doc, {
+    startY: 22,
+    head: [columns],
+    body: rows.map((r) => columns.map((c) => r[c])),
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [208, 24, 41] },
+  });
+  doc.save(filename + ".pdf");
+}
+
+function inDateRange(isoDate, fromDate, toDate) {
+  if (!isoDate) return false;
+  const d = isoDate.slice(0, 10);
+  if (fromDate && d < fromDate) return false;
+  if (toDate && d > toDate) return false;
+  return true;
+}
+
+function DateFilterExport({ fromDate, toDate, setFromDate, setToDate, onExportExcel, onExportPDF }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
+      <Field label="Dari tanggal">
+        <input type="date" style={inputStyle} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+      </Field>
+      <Field label="Sampai tanggal">
+        <input type="date" style={inputStyle} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+      </Field>
+      {(fromDate || toDate) && (
+        <button style={btnGhost} onClick={() => { setFromDate(""); setToDate(""); }}><X size={14} />Reset</button>
+      )}
+      <div style={{ flex: 1 }} />
+      <button style={btnGhost} onClick={onExportExcel}><Download size={14} />Excel</button>
+      <button style={btnGhost} onClick={onExportPDF}><Download size={14} />PDF</button>
+    </div>
+  );
+}
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');`;
 
@@ -33,6 +85,7 @@ const ROLES = [
   { id: "manager", label: "Manager" },
   { id: "warehouse", label: "Warehouse" },
   { id: "produksi", label: "Produksi" },
+  { id: "finance", label: "Finance" },
   { id: "sales", label: "Sales" },
 ];
 function canApprove(role) { return role === "manager" || role === "super_admin"; }
@@ -48,14 +101,16 @@ const MODULES = [
   { id: "recipes", label: "Resep & Forecast" },
   { id: "batches", label: "Produksi (Batch)" },
   { id: "opname", label: "Stock Opname" },
-  { id: "pos", label: "POS Penjualan" },
+  { id: "pos", label: "Pencatat Order" },
+  { id: "pettycash", label: "Kas Kecil" },
   { id: "audit", label: "Log Aktivitas" },
 ];
 
 const DEFAULT_PERMISSIONS = {
-  manager: ["dashboard", "materials", "suppliers", "purchases", "recipes", "batches", "opname", "audit"],
+  manager: ["dashboard", "materials", "suppliers", "purchases", "recipes", "batches", "opname", "pettycash", "audit"],
   warehouse: ["dashboard", "materials", "suppliers", "purchases", "opname"],
   produksi: ["dashboard", "materials", "recipes", "batches", "opname"],
+  finance: ["dashboard", "purchases", "pettycash", "audit"],
   sales: ["dashboard", "pos"],
 };
 
@@ -75,7 +130,8 @@ function seedData() {
       id: uid("rcp"),
       name: "Roti Coklat",
       yieldQty: 10,
-      sellPrice: 8000,
+      sellPrice: 8000, // sudah tidak dipakai (Resep tanpa harga), dibiarkan agar data lama tetap valid
+      minFinishedStock: 5,
       finishedStock: 0,
       items: [
         { id: uid("ri"), rawMaterialId: rawMaterials[0].id, qty: 200, unitId: "gram" },
@@ -84,7 +140,7 @@ function seedData() {
       ],
     },
   ];
-  return { units: SEED_UNITS, suppliers, rawMaterials, recipes, batches: [], opnames: [], sales: [], purchases: [], auditLog: [], permissions: DEFAULT_PERMISSIONS };
+  return { units: SEED_UNITS, suppliers, rawMaterials, recipes, batches: [], opnames: [], sales: [], purchases: [], pettyCash: [], auditLog: [], permissions: DEFAULT_PERMISSIONS };
 }
 
 function convertToBase(qty, unit) {
@@ -171,10 +227,11 @@ export default function App() {
     return {
       sales: [],
       purchases: [],
+      pettyCash: [],
       auditLog: [],
       permissions: DEFAULT_PERMISSIONS,
       ...parsed,
-      recipes: (parsed.recipes || []).map((r) => ({ sellPrice: 0, finishedStock: 0, ...r })),
+      recipes: (parsed.recipes || []).map((r) => ({ finishedStock: 0, minFinishedStock: 0, ...r })),
       rawMaterials: (parsed.rawMaterials || []).map((r) => ({ lastPrice: 0, priceHistory: [], ...r })),
     };
   }
@@ -318,7 +375,8 @@ export default function App() {
     { id: "recipes", label: "Resep & Forecast", icon: ChefHat },
     { id: "batches", label: "Produksi (Batch)", icon: Factory },
     { id: "opname", label: "Stock Opname", icon: ClipboardList },
-    { id: "pos", label: "POS Penjualan", icon: ShoppingCart },
+    { id: "pos", label: "Pencatat Order", icon: ShoppingCart },
+    { id: "pettycash", label: "Kas Kecil", icon: Wallet },
     { id: "audit", label: "Log Aktivitas", icon: ShieldCheck },
   ];
   const isSuperAdmin = role === "super_admin";
@@ -331,7 +389,8 @@ export default function App() {
     <div style={{ background: COLORS.bg, minHeight: 640, fontFamily: "Inter", color: COLORS.ink, display: "flex", flexDirection: "column" }}>
       <style>{FONT_IMPORT}{`
         @keyframes pulseGauge { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
-        * { box-sizing: border-box; }
+        * { box-sizing: border-box; text-transform: uppercase; }
+        input::placeholder { text-transform: uppercase; }
       `}</style>
 
       <header style={{ position: "relative", padding: "22px 20px 20px", overflow: "hidden", borderBottom: `3px solid ${COLORS.ink}` }}>
@@ -345,7 +404,7 @@ export default function App() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 10, fontWeight: 600, color: dbConnected ? COLORS.success : COLORS.muted, background: "#FFFFFF", padding: "5px 9px", borderRadius: 8, border: `1px solid ${COLORS.border}` }}>
-              {dbConnected ? "● Supabase Tersambung" : "○ Mode Lokal (belum konek DB)"}
+              {dbConnected ? "● Online" : "○ Offline"}
             </span>
             {supabase && session ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: COLORS.ink, fontFamily: "Inter", background: "#FFFFFF", padding: "6px 10px", borderRadius: 8, border: `1px solid ${COLORS.border}` }}>
@@ -407,6 +466,7 @@ export default function App() {
         {tab === "batches" && <BatchesPanel data={data} setData={setData} unitById={unitById} rmById={rmById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "opname" && <OpnamePanel data={data} setData={setData} unitById={unitById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "pos" && <PosPanel data={data} setData={setData} role={role} logAction={logAction} showToast={showToast} />}
+        {tab === "pettycash" && <PettyCashPanel data={data} setData={setData} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "access" && <AccessPanel data={data} setData={setData} logAction={logAction} showToast={showToast} />}
         {tab === "users" && <UsersPanel showToast={showToast} />}
         {tab === "audit" && <AuditLogPanel data={data} />}
@@ -431,102 +491,50 @@ function SectionTitle({ children, action }) {
 }
 
 function Dashboard({ data, unitById, role }) {
-  const showAnalytics = role === "super_admin" || role === "manager";
-
-  const salesByDay = {};
-  (data.sales || []).forEach((s) => {
-    const day = s.createdAt.slice(0, 10);
-    salesByDay[day] = (salesByDay[day] || 0) + s.total;
-  });
-  const salesChartData = Object.entries(salesByDay).sort(([a], [b]) => a.localeCompare(b)).map(([day, total]) => ({ day: day.slice(5), total }));
-
-  const bestSellerMap = {};
-  (data.sales || []).forEach((s) => s.items.forEach((it) => { bestSellerMap[it.name] = (bestSellerMap[it.name] || 0) + it.qty; }));
-  const bestSellerData = Object.entries(bestSellerMap).sort(([, a], [, b]) => b - a).slice(0, 6).map(([name, qty]) => ({ name, qty }));
-
-  function costPerBaseUnit(rm) {
-    const purchaseUnit = unitById(rm.purchaseUnitId);
-    return purchaseUnit && purchaseUnit.toBase ? (rm.lastPrice || 0) / purchaseUnit.toBase : 0;
-  }
-  function latestHppPerUnit(recipeId) {
-    const batches = (data.batches || []).filter((b) => b.recipeId === recipeId && b.status === "completed" && b.hppPerUnit != null);
-    if (batches.length === 0) return 0;
-    return batches.sort((a, b) => new Date(b.finishedAt) - new Date(a.finishedAt))[0].hppPerUnit;
-  }
-
-  const stockValueRaw = data.rawMaterials.reduce((sum, rm) => sum + rm.stock * costPerBaseUnit(rm), 0);
-  const stockValueFinished = data.recipes.reduce((sum, r) => sum + (r.finishedStock || 0) * latestHppPerUnit(r.id), 0);
-  const totalStockValue = stockValueRaw + stockValueFinished;
-
-  const totalRejectLoss = (data.batches || [])
-    .filter((b) => b.status === "completed")
-    .reduce((sum, b) => sum + (b.rejectQty || 0) * (b.hppPerUnit || 0), 0);
-
-  const totalRevenue = (data.sales || []).reduce((sum, s) => sum + s.total, 0);
-  const totalCOGS = (data.sales || []).reduce((sum, s) => sum + s.items.reduce((isum, it) => isum + it.qty * latestHppPerUnit(it.recipeId), 0), 0);
-  const labaRugi = totalRevenue - totalCOGS;
+  const finishedStockData = data.recipes.map((r) => ({ name: r.name, qty: r.finishedStock || 0, min: r.minFinishedStock || 0 }));
 
   return (
     <div>
-      {showAnalytics && (
-        <>
-          <SectionTitle>Ringkasan Keuangan</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 22 }}>
-            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
-              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Laba Rugi (estimasi)</div>
-              <div style={{ fontFamily: "JetBrains Mono", fontSize: 20, fontWeight: 600, color: labaRugi >= 0 ? COLORS.success : COLORS.alert }}>
-                {labaRugi < 0 ? "-" : ""}Rp{Math.abs(Math.round(labaRugi)).toLocaleString("id-ID")}
+      <SectionTitle>Stok Produk Jadi</SectionTitle>
+      <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, marginBottom: 22 }}>
+        {finishedStockData.length === 0 ? <EmptyState text="Belum ada resep/produk jadi." /> : (
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={finishedStockData}>
+              <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={{ fill: COLORS.muted, fontSize: 10 }} />
+              <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} width={30} />
+              <Tooltip contentStyle={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 6, color: COLORS.ink }} />
+              <Bar dataKey="qty" fill={COLORS.crimson} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      <SectionTitle>Alarm Stok Produk Jadi</SectionTitle>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12, marginBottom: 22 }}>
+        {data.recipes.map((r) => {
+          const min = r.minFinishedStock || 0;
+          const pct = min > 0 ? ((r.finishedStock || 0) / (min * 3)) * 100 : 100;
+          const danger = min > 0 && (r.finishedStock || 0) <= min;
+          return (
+            <div key={r.id} style={{ background: COLORS.panel, border: `1px solid ${danger ? COLORS.alert : COLORS.border}`, borderRadius: 10, padding: 14, display: "flex", gap: 12, alignItems: "center" }}>
+              <StockGauge pct={pct} danger={danger} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{r.name}</div>
+                <div style={{ fontFamily: "JetBrains Mono", fontSize: 13, color: COLORS.ink, marginTop: 2 }}>
+                  {(r.finishedStock || 0).toLocaleString("id-ID")} unit
+                </div>
+                <div style={{ fontSize: 11, color: danger ? COLORS.alert : COLORS.muted, display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                  {danger ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />}
+                  {min === 0 ? "Belum ada min. stok" : danger ? "Di bawah batas minimum" : "Stok aman"}
+                </div>
               </div>
-              <div style={{ fontSize: 10.5, color: COLORS.muted, marginTop: 3 }}>Penjualan − estimasi HPP terjual</div>
             </div>
-            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
-              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Total Nilai Stok</div>
-              <div style={{ fontFamily: "JetBrains Mono", fontSize: 20, fontWeight: 600, color: COLORS.ink }}>Rp{Math.round(totalStockValue).toLocaleString("id-ID")}</div>
-              <div style={{ fontSize: 10.5, color: COLORS.muted, marginTop: 3 }}>Bahan baku Rp{Math.round(stockValueRaw).toLocaleString("id-ID")} · Produk jadi Rp{Math.round(stockValueFinished).toLocaleString("id-ID")}</div>
-            </div>
-            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
-              <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Kerugian Reject Produksi</div>
-              <div style={{ fontFamily: "JetBrains Mono", fontSize: 20, fontWeight: 600, color: COLORS.alert }}>Rp{Math.round(totalRejectLoss).toLocaleString("id-ID")}</div>
-              <div style={{ fontSize: 10.5, color: COLORS.muted, marginTop: 3 }}>Total biaya bahan baku dari unit gagal/reject</div>
-            </div>
-          </div>
-        </>
-      )}
-      {showAnalytics && (
-        <>
-          <SectionTitle>Grafik Penjualan</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginBottom: 22 }}>
-            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
-              <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 15, marginBottom: 8 }}>Omzet per Hari</div>
-              {salesChartData.length === 0 ? <EmptyState text="Belum ada transaksi penjualan." /> : (
-                <ResponsiveContainer width="100%" height={180}>
-                  <LineChart data={salesChartData}>
-                    <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
-                    <XAxis dataKey="day" tick={{ fill: COLORS.muted, fontSize: 11 }} />
-                    <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} width={50} />
-                    <Tooltip contentStyle={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 6, color: COLORS.ink }} />
-                    <Line type="monotone" dataKey="total" stroke={COLORS.crimson} strokeWidth={2} dot={{ fill: COLORS.crimson, r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
-              <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 15, marginBottom: 8 }}>Produk Terlaris (qty)</div>
-              {bestSellerData.length === 0 ? <EmptyState text="Belum ada transaksi penjualan." /> : (
-                <ResponsiveContainer width="100%" height={180}>
-                  <BarChart data={bestSellerData}>
-                    <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
-                    <XAxis dataKey="name" tick={{ fill: COLORS.muted, fontSize: 10 }} />
-                    <YAxis tick={{ fill: COLORS.muted, fontSize: 11 }} width={30} />
-                    <Tooltip contentStyle={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 6, color: COLORS.ink }} />
-                    <Bar dataKey="qty" fill={COLORS.success} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </>
-      )}
+          );
+        })}
+        {data.recipes.length === 0 && <EmptyState text="Belum ada resep/produk jadi." />}
+      </div>
+
       <SectionTitle>Status Stok Bahan Baku</SectionTitle>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
         {data.rawMaterials.map((rm) => {
@@ -635,9 +643,35 @@ function MaterialsPanel({ data, setData, unitById, showToast }) {
 
   const baseUnits = data.units.filter((u) => u.toBase === 1);
 
+  function buildStockExportRows() {
+    return data.rawMaterials.map((rm) => {
+      const base = unitById(rm.baseUnitId);
+      const purchase = unitById(rm.purchaseUnitId);
+      const sup = data.suppliers.find((s) => s.id === rm.supplierId);
+      const costPerBase = purchase && purchase.toBase ? (rm.lastPrice || 0) / purchase.toBase : 0;
+      return {
+        Kode: rm.code,
+        Nama: rm.name,
+        Stok: rm.stock,
+        Satuan: base?.symbol,
+        "Min. Stok": rm.minAlert,
+        Supplier: sup?.name || "-",
+        "Harga Terakhir/Satuan Beli": rm.lastPrice || 0,
+        "Nilai Stok (Rp)": Math.round(rm.stock * costPerBase),
+      };
+    });
+  }
+
   return (
     <div>
       <SectionTitle>Bahan Baku</SectionTitle>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
+        <button style={btnGhost} onClick={() => exportExcel("stok-bahan-baku", buildStockExportRows())}><Download size={14} />Excel</button>
+        <button style={btnGhost} onClick={() => exportPDF("stok-bahan-baku", "Laporan Stok Bahan Baku (Snapshot Saat Ini)", buildStockExportRows())}><Download size={14} />PDF</button>
+      </div>
+      <p style={{ color: COLORS.muted, fontSize: 11.5, marginTop: -8, marginBottom: 14 }}>
+        Catatan: laporan ini adalah snapshot stok saat ini (bukan riwayat per tanggal), karena stok bahan baku adalah angka yang selalu berubah, bukan data bertanggal.
+      </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
         {data.rawMaterials.map((rm) => {
           const base = unitById(rm.baseUnitId);
@@ -727,7 +761,7 @@ function SuppliersPanel({ data, setData, showToast }) {
 function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
   const [name, setName] = useState("");
   const [yieldQty, setYieldQty] = useState("");
-  const [sellPrice, setSellPrice] = useState("");
+  const [minFinishedStock, setMinFinishedStock] = useState("");
   const [items, setItems] = useState([{ id: uid("ri"), rawMaterialId: data.rawMaterials[0]?.id || "", qty: "", unitId: data.units[0]?.id || "" }]);
 
   function addItemRow() {
@@ -749,9 +783,9 @@ function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
       const rmBaseUnit = unitById(rm.baseUnitId);
       if (itemUnit.type !== rmBaseUnit.type) return showToast(`Satuan untuk ${rm.name} tidak sesuai tipe (harus ${TYPE_LABEL[rmBaseUnit.type]})`, true);
     }
-    const recipe = { id: uid("rcp"), name, yieldQty: parseFloat(yieldQty), sellPrice: parseFloat(sellPrice) || 0, finishedStock: 0, items: items.map((i) => ({ ...i, qty: parseFloat(i.qty) })) };
+    const recipe = { id: uid("rcp"), name, yieldQty: parseFloat(yieldQty), minFinishedStock: parseFloat(minFinishedStock) || 0, finishedStock: 0, items: items.map((i) => ({ ...i, qty: parseFloat(i.qty) })) };
     setData({ ...data, recipes: [...data.recipes, recipe] });
-    setName(""); setYieldQty(""); setSellPrice("");
+    setName(""); setYieldQty(""); setMinFinishedStock("");
     setItems([{ id: uid("ri"), rawMaterialId: data.rawMaterials[0]?.id || "", qty: "", unitId: data.units[0]?.id || "" }]);
     showToast("Resep disimpan");
   }
@@ -775,6 +809,23 @@ function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
     return maxBuild === Infinity ? 0 : maxBuild * recipe.yieldQty;
   }
 
+  // Kalkulator HPP: dihitung langsung dari harga bahan baku terakhir (dari PO terakhir),
+  // bukan menunggu ada batch yang selesai. Jadi selalu tersedia begitu ada harga PO.
+  function calcHppPerUnit(recipe) {
+    if (!recipe.yieldQty) return 0;
+    let totalCost = 0;
+    for (const it of recipe.items) {
+      const rm = rmById(it.rawMaterialId);
+      if (!rm) continue;
+      const itemUnit = unitById(it.unitId);
+      const purchaseUnit = unitById(rm.purchaseUnitId);
+      const neededBase = convertToBase(it.qty, itemUnit);
+      const costPerBase = purchaseUnit && purchaseUnit.toBase ? (rm.lastPrice || 0) / purchaseUnit.toBase : 0;
+      totalCost += neededBase * costPerBase;
+    }
+    return totalCost / recipe.yieldQty;
+  }
+
   return (
     <div>
       <SectionTitle>Resep &amp; Forecast Produksi</SectionTitle>
@@ -782,19 +833,16 @@ function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
         {data.recipes.map((r) => {
           const fc = forecastFor(r);
-          const lastBatch = (data.batches || []).filter((b) => b.recipeId === r.id && b.status === "completed" && b.hppPerUnit != null).sort((a, b) => new Date(b.finishedAt) - new Date(a.finishedAt))[0];
-          const margin = lastBatch ? (r.sellPrice || 0) - lastBatch.hppPerUnit : null;
+          const hppEstimate = calcHppPerUnit(r);
           return (
             <div key={r.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
                 <div>
                   <div style={{ fontFamily: "Anton", fontWeight: 700, fontSize: 18 }}>{r.name}</div>
-                  <div style={{ fontSize: 12, color: COLORS.muted }}>1 batch resep = {r.yieldQty} unit · Rp{(r.sellPrice || 0).toLocaleString("id-ID")}/unit · Stok jadi: {r.finishedStock || 0}</div>
-                  {lastBatch && (
-                    <div style={{ fontSize: 11.5, color: margin >= 0 ? COLORS.success : COLORS.alert, marginTop: 3, fontFamily: "JetBrains Mono" }}>
-                      HPP terakhir Rp{Math.round(lastBatch.hppPerUnit).toLocaleString("id-ID")}/unit · Margin Rp{Math.round(margin).toLocaleString("id-ID")}/unit
-                    </div>
-                  )}
+                  <div style={{ fontSize: 12, color: COLORS.muted }}>1 batch resep = {r.yieldQty} unit · Stok jadi: {r.finishedStock || 0} · Min stok: {r.minFinishedStock || 0}</div>
+                  <div style={{ fontSize: 12, color: COLORS.crimson, marginTop: 3, fontFamily: "JetBrains Mono", display: "flex", alignItems: "center", gap: 4 }}>
+                    <Calculator size={13} /> Estimasi HPP: Rp{Math.round(hppEstimate).toLocaleString("id-ID")}/unit
+                  </div>
                 </div>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ fontFamily: "JetBrains Mono", fontSize: 22, color: COLORS.crimson, fontWeight: 600 }}>{fc}</div>
@@ -825,7 +873,7 @@ function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
           <Field label="Nama produk / resep"><input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="mis. Roti Coklat" /></Field>
           <Field label="Yield (unit per batch resep)"><input style={{ ...inputStyle, width: 100 }} type="number" value={yieldQty} onChange={(e) => setYieldQty(e.target.value)} placeholder="10" /></Field>
-          <Field label="Harga jual per unit (Rp)"><input style={{ ...inputStyle, width: 120 }} type="number" value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} placeholder="8000" /></Field>
+          <Field label="Min. stok produk jadi (alarm)"><input style={{ ...inputStyle, width: 100 }} type="number" value={minFinishedStock} onChange={(e) => setMinFinishedStock(e.target.value)} placeholder="5" /></Field>
         </div>
 
         <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 6 }}>Bahan baku (harus dipilih dari yang sudah ada)</div>
@@ -876,6 +924,7 @@ function BatchesPanel({ data, setData, unitById, rmById, role, logAction, showTo
   const allowed = canManageBatch(role);
   const [recipeId, setRecipeId] = useState(data.recipes[0]?.id || "");
   const [multiplier, setMultiplier] = useState("1");
+  const [scheduledDate, setScheduledDate] = useState(new Date().toISOString().slice(0, 10));
   const [finishing, setFinishing] = useState(null); // batch id being finished
   const [actualOutput, setActualOutput] = useState("");
   const [rejectQty, setRejectQty] = useState("0");
@@ -906,6 +955,7 @@ function BatchesPanel({ data, setData, unitById, rmById, role, logAction, showTo
       recipeId: recipe.id,
       recipeName: recipe.name,
       multiplier: mult,
+      scheduledDate,
       plannedOutput: mult * recipe.yieldQty,
       actualOutput: null,
       rejectQty: 0,
@@ -969,6 +1019,7 @@ function BatchesPanel({ data, setData, unitById, rmById, role, logAction, showTo
           </select>
         </Field>
         <Field label="Jumlah batch (kelipatan resep)"><input style={{ ...inputStyle, width: 100 }} type="number" value={multiplier} onChange={(e) => setMultiplier(e.target.value)} /></Field>
+        <Field label="Tanggal jadwal produksi"><input style={inputStyle} type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} /></Field>
         {recipe && <div style={{ fontSize: 12, color: COLORS.muted }}>Output rencana: <b style={{ color: COLORS.ink }}>{(parseFloat(multiplier) || 0) * recipe.yieldQty}</b> unit</div>}
         <button style={btnPrimary} onClick={createBatch} disabled={!allowed}><Plus size={16} />Buat Batch</button>
       </div>
@@ -980,6 +1031,7 @@ function BatchesPanel({ data, setData, unitById, rmById, role, logAction, showTo
               <div>
                 <div style={{ fontFamily: "JetBrains Mono", fontSize: 13, color: COLORS.crimson }}>{b.batchNumber}</div>
                 <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{b.recipeName} · x{b.multiplier}</div>
+                {b.scheduledDate && <div style={{ fontSize: 11.5, color: COLORS.muted, display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}><CalendarDays size={12} />{new Date(b.scheduledDate).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}</div>}
               </div>
               <StatusBadge status={b.status} />
             </div>
@@ -1126,20 +1178,9 @@ function OpnamePanel({ data, setData, unitById, role, logAction, showToast }) {
 function PosPanel({ data, setData, role, logAction, showToast }) {
   const [cart, setCart] = useState({}); // recipeId -> qty
   const [customerName, setCustomerName] = useState("");
-  const [discountAmount, setDiscountAmount] = useState("");
-  const [taxPercent, setTaxPercent] = useState("");
 
-  const sellable = data.recipes.filter((r) => (r.finishedStock || 0) > 0 || (cart[r.id] || 0) > 0);
+  const available = data.recipes.filter((r) => (r.finishedStock || 0) > 0 || (cart[r.id] || 0) > 0);
   const cartItems = Object.entries(cart).filter(([, q]) => q > 0);
-  const subtotal = cartItems.reduce((sum, [rid, q]) => {
-    const r = data.recipes.find((x) => x.id === rid);
-    return sum + (r?.sellPrice || 0) * q;
-  }, 0);
-  const discount = Math.min(parseFloat(discountAmount) || 0, subtotal);
-  const afterDiscount = subtotal - discount;
-  const taxPct = parseFloat(taxPercent) || 0;
-  const taxAmount = Math.round(afterDiscount * (taxPct / 100));
-  const total = afterDiscount + taxAmount;
 
   function setQty(r, qty) {
     const clamped = Math.max(0, Math.min(qty, r.finishedStock || 0));
@@ -1158,52 +1199,44 @@ function PosPanel({ data, setData, role, logAction, showToast }) {
     setQty(r, (cart[r.id] || 0) - 1);
   }
 
-  function checkout() {
-    if (cartItems.length === 0) return showToast("Keranjang masih kosong", true);
+  function recordOrder() {
+    if (cartItems.length === 0) return showToast("Belum ada produk yang dipilih", true);
     const items = cartItems.map(([rid, q]) => {
       const r = data.recipes.find((x) => x.id === rid);
-      return { recipeId: rid, name: r.name, qty: q, price: r.sellPrice, subtotal: r.sellPrice * q };
+      return { recipeId: rid, name: r.name, qty: q };
     });
     const updatedRecipes = data.recipes.map((r) => {
       const bought = cart[r.id];
       return bought ? { ...r, finishedStock: (r.finishedStock || 0) - bought } : r;
     });
-    const sale = {
-      id: uid("sale"),
-      transactionNumber: "TRX-" + Date.now().toString().slice(-8),
+    const order = {
+      id: uid("order"),
+      orderNumber: "ORD-" + Date.now().toString().slice(-8),
       customerName: customerName.trim() || null,
       items,
-      subtotal,
-      discountAmount: discount,
-      taxPercent: taxPct,
-      taxAmount,
-      total,
-      cashier: role,
+      recordedBy: role,
       createdAt: new Date().toISOString(),
     };
     setData({
       ...data,
       recipes: updatedRecipes,
-      sales: [sale, ...(data.sales || [])],
-      auditLog: [logAction("Transaksi POS", `${sale.transactionNumber} · Rp${total.toLocaleString("id-ID")}${sale.customerName ? " · " + sale.customerName : ""}`), ...(data.auditLog || [])].slice(0, 200),
+      sales: [order, ...(data.sales || [])],
+      auditLog: [logAction("Catat Order", `${order.orderNumber}${order.customerName ? " · " + order.customerName : ""}`), ...(data.auditLog || [])].slice(0, 200),
     });
     setCart({});
     setCustomerName("");
-    setDiscountAmount("");
-    setTaxPercent("");
-    showToast("Transaksi berhasil: Rp" + total.toLocaleString("id-ID"));
+    showToast("Order tercatat: " + order.orderNumber);
   }
 
   return (
     <div>
-      <SectionTitle>POS Penjualan</SectionTitle>
+      <SectionTitle>Pencatat Order</SectionTitle>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, alignItems: "flex-start" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
-          {sellable.map((r) => (
+          {available.map((r) => (
             <div key={r.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12 }}>
               <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 15 }}>{r.name}</div>
-              <div style={{ fontFamily: "JetBrains Mono", fontSize: 14, color: COLORS.crimson, marginTop: 4 }}>Rp{(r.sellPrice || 0).toLocaleString("id-ID")}</div>
-              <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>Stok: {r.finishedStock || 0}</div>
+              <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 4 }}>Stok: {r.finishedStock || 0}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
                 <button onClick={() => removeFromCart(r)} style={{ ...btnGhost, padding: "4px 8px" }}><Minus size={13} /></button>
                 <input
@@ -1216,51 +1249,33 @@ function PosPanel({ data, setData, role, logAction, showToast }) {
               </div>
             </div>
           ))}
-          {sellable.length === 0 && <EmptyState text="Belum ada produk jadi yang siap dijual. Selesaikan batch produksi dulu." />}
+          {available.length === 0 && <EmptyState text="Belum ada produk jadi yang tersedia. Selesaikan batch produksi dulu." />}
         </div>
 
         <div style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, position: "sticky", top: 0 }}>
-          <div style={{ fontFamily: "Anton", fontWeight: 700, fontSize: 16, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><ShoppingCart size={16} />Keranjang</div>
+          <div style={{ fontFamily: "Anton", fontWeight: 700, fontSize: 16, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><ShoppingCart size={16} />Order</div>
 
           <Field label="Nama pelanggan (opsional)">
             <input style={inputStyle} value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="mis. Budi" />
           </Field>
 
           {cartItems.length === 0 ? (
-            <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 12 }}>Belum ada item.</div>
+            <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 12 }}>Belum ada item dipilih.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12, marginBottom: 12 }}>
               {cartItems.map(([rid, q]) => {
                 const r = data.recipes.find((x) => x.id === rid);
                 return (
                   <div key={rid} style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                    <span>{r.name} x{q}</span>
-                    <span style={{ fontFamily: "JetBrains Mono" }}>Rp{(r.sellPrice * q).toLocaleString("id-ID")}</span>
+                    <span>{r.name}</span>
+                    <span style={{ fontFamily: "JetBrains Mono" }}>x{q}</span>
                   </div>
                 );
               })}
             </div>
           )}
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            <Field label="Diskon (Rp, opsional)">
-              <input type="number" style={{ ...inputStyle, width: "100%" }} value={discountAmount} onChange={(e) => setDiscountAmount(e.target.value)} placeholder="0" />
-            </Field>
-            <Field label="PPN (%, opsional)">
-              <input type="number" style={{ ...inputStyle, width: "100%" }} value={taxPercent} onChange={(e) => setTaxPercent(e.target.value)} placeholder="0" />
-            </Field>
-          </div>
-
-          <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5, color: COLORS.muted }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><span style={{ fontFamily: "JetBrains Mono" }}>Rp{subtotal.toLocaleString("id-ID")}</span></div>
-            {discount > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>Diskon</span><span style={{ fontFamily: "JetBrains Mono" }}>-Rp{discount.toLocaleString("id-ID")}</span></div>}
-            {taxAmount > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>PPN ({taxPct}%)</span><span style={{ fontFamily: "JetBrains Mono" }}>+Rp{taxAmount.toLocaleString("id-ID")}</span></div>}
-          </div>
-          <div style={{ paddingTop: 8, display: "flex", justifyContent: "space-between", fontFamily: "Anton", fontWeight: 700, fontSize: 17 }}>
-            <span>Total</span>
-            <span style={{ color: COLORS.crimson, fontFamily: "JetBrains Mono" }}>Rp{total.toLocaleString("id-ID")}</span>
-          </div>
-          <button style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 12 }} onClick={checkout}><Save size={16} />Checkout</button>
+          <button style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 12 }} onClick={recordOrder}><Save size={16} />Catat Order</button>
         </div>
       </div>
     </div>
@@ -1338,7 +1353,7 @@ function LoginScreen() {
 
   return (
     <div style={{ background: COLORS.bg, minHeight: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "Inter" }}>
-      <style>{FONT_IMPORT}</style>
+      <style>{FONT_IMPORT}{`* { text-transform: uppercase; }`}</style>
       <form onSubmit={handleLogin} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 28, width: "100%", maxWidth: 360, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: -30, right: -30, width: 100, height: 100, background: COLORS.crimson, transform: "rotate(45deg)" }} />
         <div style={{ position: "relative", zIndex: 1 }}>
@@ -1368,7 +1383,7 @@ function LoginScreen() {
 function PendingRoleScreen({ email, onLogout, hasProfile }) {
   return (
     <div style={{ background: COLORS.bg, minHeight: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "Inter", textAlign: "center" }}>
-      <style>{FONT_IMPORT}</style>
+      <style>{FONT_IMPORT}{`* { text-transform: uppercase; }`}</style>
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 28, maxWidth: 360 }}>
         <ShieldCheck size={32} color={COLORS.crimson} style={{ marginBottom: 10 }} />
         <div style={{ fontFamily: "Anton", fontSize: 20, color: COLORS.ink, marginBottom: 6 }}>MENUNGGU PENUGASAN ROLE</div>
@@ -1440,6 +1455,8 @@ function UsersPanel({ showToast }) {
 function PurchasesPanel({ data, setData, unitById, logAction, showToast }) {
   const emptyForm = { supplierId: data.suppliers[0]?.id || "", rawMaterialId: data.rawMaterials[0]?.id || "", qty: "", price: "" };
   const [form, setForm] = useState(emptyForm);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
   function createPO() {
     if (!form.supplierId || !form.rawMaterialId || !form.qty || !form.price) return showToast("Lengkapi semua field pembelian", true);
@@ -1484,9 +1501,38 @@ function PurchasesPanel({ data, setData, unitById, logAction, showToast }) {
     setData({ ...data, purchases: data.purchases.filter((p) => p.id !== id) });
   }
 
+  const filteredPurchases = data.purchases.filter((po) => !(fromDate || toDate) || inDateRange(po.createdAt, fromDate, toDate));
+
+  function buildExportRows() {
+    return filteredPurchases.map((po) => {
+      const rm = data.rawMaterials.find((r) => r.id === po.rawMaterialId);
+      const sup = data.suppliers.find((s) => s.id === po.supplierId);
+      return {
+        "No PO": po.poNumber,
+        Tanggal: new Date(po.createdAt).toLocaleDateString("id-ID"),
+        Supplier: sup?.name || "-",
+        "Bahan Baku": rm?.name || "-",
+        Jumlah: po.qty,
+        Satuan: po.unitSymbol,
+        "Harga/Satuan": po.price,
+        Total: po.qty * po.price,
+        Status: po.status === "received" ? "Diterima" : "Dipesan",
+      };
+    });
+  }
+
   return (
     <div>
       <SectionTitle>Pembelian ke Supplier (PO)</SectionTitle>
+
+      <DateFilterExport
+        fromDate={fromDate}
+        toDate={toDate}
+        setFromDate={setFromDate}
+        setToDate={setToDate}
+        onExportExcel={() => exportExcel("pembelian-po", buildExportRows())}
+        onExportPDF={() => exportPDF("pembelian-po", "Laporan Pembelian (PO)", buildExportRows())}
+      />
 
       <div style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
         <Field label="Supplier">
@@ -1505,7 +1551,7 @@ function PurchasesPanel({ data, setData, unitById, logAction, showToast }) {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {data.purchases.map((po) => {
+        {filteredPurchases.map((po) => {
           const rm = data.rawMaterials.find((r) => r.id === po.rawMaterialId);
           const sup = data.suppliers.find((s) => s.id === po.supplierId);
           const total = po.qty * po.price;
@@ -1528,7 +1574,7 @@ function PurchasesPanel({ data, setData, unitById, logAction, showToast }) {
             </div>
           );
         })}
-        {data.purchases.length === 0 && <EmptyState text="Belum ada pembelian ke supplier." />}
+        {filteredPurchases.length === 0 && <EmptyState text="Belum ada pembelian ke supplier." />}
       </div>
     </div>
   );
@@ -1554,6 +1600,119 @@ function AuditLogPanel({ data }) {
           </div>
         ))}
         {(!data.auditLog || data.auditLog.length === 0) && <EmptyState text="Belum ada aktivitas tercatat." />}
+      </div>
+    </div>
+  );
+}
+
+function PettyCashPanel({ data, setData, role, logAction, showToast }) {
+  const emptyForm = { type: "keluar", amount: "", description: "", date: new Date().toISOString().slice(0, 10) };
+  const [form, setForm] = useState(emptyForm);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  function addEntry() {
+    if (!form.amount || !form.description) return showToast("Lengkapi jumlah dan keterangan", true);
+    const entry = {
+      id: uid("kas"),
+      type: form.type,
+      amount: parseFloat(form.amount) || 0,
+      description: form.description,
+      date: form.date,
+      createdBy: role,
+      createdAt: new Date().toISOString(),
+    };
+    setData({
+      ...data,
+      pettyCash: [entry, ...(data.pettyCash || [])],
+      auditLog: [logAction(form.type === "masuk" ? "Kas Masuk" : "Kas Keluar", `Rp${entry.amount.toLocaleString("id-ID")} · ${entry.description}`), ...(data.auditLog || [])].slice(0, 200),
+    });
+    setForm({ ...emptyForm, date: form.date });
+    showToast("Catatan kas ditambahkan");
+  }
+
+  function removeEntry(id) {
+    setData({ ...data, pettyCash: (data.pettyCash || []).filter((e) => e.id !== id) });
+  }
+
+  const filtered = (data.pettyCash || [])
+    .filter((e) => !(fromDate || toDate) || inDateRange(e.date, fromDate, toDate))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const totalMasuk = filtered.filter((e) => e.type === "masuk").reduce((s, e) => s + e.amount, 0);
+  const totalKeluar = filtered.filter((e) => e.type === "keluar").reduce((s, e) => s + e.amount, 0);
+  const saldo = totalMasuk - totalKeluar;
+
+  function buildExportRows() {
+    return filtered.map((e) => ({
+      Tanggal: new Date(e.date).toLocaleDateString("id-ID"),
+      Jenis: e.type === "masuk" ? "Kas Masuk" : "Kas Keluar",
+      Keterangan: e.description,
+      Jumlah: e.amount,
+      "Dicatat Oleh": e.createdBy,
+    }));
+  }
+
+  return (
+    <div>
+      <SectionTitle>Kas Kecil</SectionTitle>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
+        <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 11, color: COLORS.muted }}>Total Masuk</div>
+          <div style={{ fontFamily: "JetBrains Mono", fontSize: 18, fontWeight: 600, color: COLORS.success }}>Rp{totalMasuk.toLocaleString("id-ID")}</div>
+        </div>
+        <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 11, color: COLORS.muted }}>Total Keluar</div>
+          <div style={{ fontFamily: "JetBrains Mono", fontSize: 18, fontWeight: 600, color: COLORS.alert }}>Rp{totalKeluar.toLocaleString("id-ID")}</div>
+        </div>
+        <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 11, color: COLORS.muted }}>Saldo</div>
+          <div style={{ fontFamily: "JetBrains Mono", fontSize: 18, fontWeight: 600, color: saldo >= 0 ? COLORS.ink : COLORS.alert }}>Rp{saldo.toLocaleString("id-ID")}</div>
+        </div>
+      </div>
+
+      <div style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
+        <Field label="Jenis">
+          <select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+            <option value="keluar">Kas Keluar</option>
+            <option value="masuk">Kas Masuk</option>
+          </select>
+        </Field>
+        <Field label="Tanggal"><input type="date" style={inputStyle} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+        <Field label="Jumlah (Rp)"><input type="number" style={{ ...inputStyle, width: 130 }} value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></Field>
+        <Field label="Keterangan"><input style={inputStyle} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="mis. Beli plastik kemasan" /></Field>
+        <button style={btnPrimary} onClick={addEntry}><Plus size={16} />Tambah</button>
+      </div>
+
+      <DateFilterExport
+        fromDate={fromDate}
+        toDate={toDate}
+        setFromDate={setFromDate}
+        setToDate={setToDate}
+        onExportExcel={() => exportExcel("kas-kecil", buildExportRows())}
+        onExportPDF={() => exportPDF("kas-kecil", "Laporan Kas Kecil", buildExportRows())}
+      />
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {filtered.map((e) => (
+          <div key={e.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {e.type === "masuk" ? <ArrowDownCircle size={18} color={COLORS.success} /> : <ArrowUpCircle size={18} color={COLORS.alert} />}
+              <div>
+                <div style={{ fontSize: 13 }}>{e.description}</div>
+                <div style={{ fontSize: 11, color: COLORS.muted }}>{new Date(e.date).toLocaleDateString("id-ID")} · {e.createdBy}</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontFamily: "JetBrains Mono", fontSize: 14, color: e.type === "masuk" ? COLORS.success : COLORS.alert }}>
+                {e.type === "masuk" ? "+" : "-"}Rp{e.amount.toLocaleString("id-ID")}
+              </span>
+              <button onClick={() => removeEntry(e.id)} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer" }}><Trash2 size={14} /></button>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && <EmptyState text="Belum ada catatan kas kecil." />}
       </div>
     </div>
   );
