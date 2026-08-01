@@ -267,7 +267,7 @@ export default function App() {
   }
 
   function logAction(action, detail) {
-    const actor = (supabase && session && session.user.email) || ROLES.find((r) => r.id === role)?.label || role;
+    const actor = (supabase && session && (profile?.full_name || session.user.email)) || ROLES.find((r) => r.id === role)?.label || role;
     return { id: uid("log"), actor, action, detail, at: new Date().toISOString() };
   }
 
@@ -287,15 +287,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!supabase || !session) {
+    if (!supabase) return;
+    if (!session) {
       setProfile(null);
+      setRole(null);
       return;
     }
+    setRole(null); // PENTING: reset dulu setiap kali sesi berganti, supaya role dari akun/sesi
+    // sebelumnya (mis. Super Admin) tidak pernah "nyangkut" ke akun baru yang belum ditugaskan.
     (async () => {
       const { data: existing, error } = await supabase.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
       if (existing) {
         setProfile(existing);
-        if (existing.role) setRole(existing.role);
+        setRole(existing.role || null);
       } else if (!error) {
         const { data: created } = await supabase
           .from("profiles")
@@ -303,6 +307,7 @@ export default function App() {
           .select()
           .single();
         setProfile(created || null);
+        setRole(created?.role || null);
       }
     })();
   }, [session]);
@@ -386,6 +391,10 @@ export default function App() {
 
   if (supabase && authChecked && !session) {
     return <LoginScreen />;
+  }
+
+  if (supabase && session && profile?.disabled) {
+    return <DisabledAccountScreen email={session.user.email} onLogout={() => supabase.auth.signOut()} />;
   }
 
   if (supabase && session && role === null) {
@@ -494,7 +503,7 @@ export default function App() {
             {supabase && session ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: COLORS.ink, fontFamily: "Inter", background: "#FFFFFF", padding: "6px 10px", borderRadius: 8, border: `1px solid ${COLORS.border}` }}>
                 <ShieldCheck size={14} color={COLORS.crimson} />
-                <span>{session.user.email} · <b style={{ color: COLORS.crimson }}>{ROLES.find((r) => r.id === role)?.label || role}</b></span>
+                <span>{profile?.full_name || session.user.email} · <b style={{ color: COLORS.crimson }}>{ROLES.find((r) => r.id === role)?.label || role}</b></span>
                 <button onClick={() => supabase.auth.signOut()} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer", fontSize: 11, textDecoration: "underline" }}>Keluar</button>
               </div>
             ) : (
@@ -585,7 +594,7 @@ export default function App() {
         {tab === "pettycash" && <PettyCashPanel data={data} setData={setData} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "access" && <AccessPanel data={data} setData={setData} logAction={logAction} showToast={showToast} />}
         {tab === "users" && <UsersPanel showToast={showToast} />}
-        {tab === "profile" && <ProfilePanel session={session} showToast={showToast} />}
+        {tab === "profile" && <ProfilePanel session={session} profile={profile} setProfile={setProfile} showToast={showToast} />}
         {tab === "audit" && <AuditLogPanel data={data} />}
       </main>
 
@@ -1658,6 +1667,23 @@ function PendingRoleScreen({ email, onLogout, hasProfile }) {
   );
 }
 
+function DisabledAccountScreen({ email, onLogout }) {
+  return (
+    <div style={{ background: COLORS.bg, minHeight: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "Inter", textAlign: "center" }}>
+      <style>{FONT_IMPORT}{`* { text-transform: uppercase; }`}</style>
+      <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 28, maxWidth: 360 }}>
+        <XCircle size={32} color={COLORS.alert} style={{ marginBottom: 10 }} />
+        <div style={{ fontFamily: "Anton", fontSize: 20, color: COLORS.ink, marginBottom: 6 }}>AKUN DINONAKTIFKAN</div>
+        <div style={{ fontSize: 13, color: COLORS.muted, marginBottom: 4 }}>{email}</div>
+        <div style={{ fontSize: 12.5, color: COLORS.muted, lineHeight: 1.6 }}>
+          Akses akun ini sudah dinonaktifkan oleh Super Admin. Hubungi Super Admin kalau menurutmu ini keliru.
+        </div>
+        <button onClick={onLogout} style={{ ...btnGhost, marginTop: 16, justifyContent: "center", width: "100%" }}>Keluar</button>
+      </div>
+    </div>
+  );
+}
+
 function UsersPanel({ showToast }) {
   const [users, setUsers] = useState(null);
   const [loadError, setLoadError] = useState("");
@@ -1680,33 +1706,67 @@ function UsersPanel({ showToast }) {
     const { error } = await supabase.from("profiles").update({ role: newRole || null }).eq("id", userId);
     if (error) return showToast("Gagal ubah role: " + error.message, true);
     setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role: newRole || null } : u)));
-    showToast("Role diperbarui");
+    showToast(newRole ? "Pengguna disetujui dengan role " + (ROLES.find((r) => r.id === newRole)?.label || newRole) : "Role dicabut");
   }
+
+  async function toggleDisabled(u) {
+    const nextDisabled = !u.disabled;
+    const { error } = await supabase.from("profiles").update({ disabled: nextDisabled }).eq("id", u.id);
+    if (error) return showToast("Gagal ubah status akun: " + error.message, true);
+    setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, disabled: nextDisabled } : x)));
+    showToast(nextDisabled ? "Akun dinonaktifkan" : "Akun diaktifkan kembali");
+  }
+
+  const sortedUsers = users ? [...users].sort((a, b) => {
+    const aPending = !a.role ? 0 : 1;
+    const bPending = !b.role ? 0 : 1;
+    if (aPending !== bPending) return aPending - bPending;
+    return (a.email || "").localeCompare(b.email || "");
+  }) : [];
 
   return (
     <div>
       <SectionTitle>Kelola Pengguna</SectionTitle>
       <p style={{ color: COLORS.muted, fontSize: 12.5, marginTop: -8, marginBottom: 16 }}>
-        Akun baru dibuat lewat dashboard Supabase (Authentication → Users → Add user). Begitu orang tersebut login pertama kali, namanya akan muncul di sini dan kamu tinggal pilih role-nya.
+        Akun baru bisa daftar sendiri lewat halaman Login ("Daftar di sini"), atau dibuatkan lewat dashboard Supabase. Begitu orang tersebut login pertama kali, namanya akan muncul di sini — pilih role-nya untuk menyetujui akses. Akun dengan role kosong belum bisa mengakses apapun.
       </p>
       {loadError && <div style={{ color: COLORS.alert, fontSize: 12, marginBottom: 10 }}>{loadError}</div>}
       {users === null ? (
         <EmptyState text="Memuat daftar pengguna..." />
-      ) : users.length === 0 ? (
+      ) : sortedUsers.length === 0 ? (
         <EmptyState text="Belum ada pengguna yang login." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {users.map((u) => (
-            <div key={u.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 13 }}>{u.email}</div>
-              <select value={u.role || ""} onChange={(e) => updateRole(u.id, e.target.value)} style={{ ...inputStyle, width: 160 }}>
-                <option value="">- Belum ditugaskan -</option>
-                {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-              </select>
+          {sortedUsers.map((u) => (
+            <div key={u.id} style={{ background: COLORS.panel, border: `1px solid ${!u.role ? COLORS.orange : COLORS.border}`, borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", opacity: u.disabled ? 0.55 : 1 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{u.full_name || u.email}</div>
+                {u.full_name && <div style={{ fontSize: 11, color: COLORS.muted }}>{u.email}</div>}
+                <div style={{ display: "flex", gap: 6, marginTop: 3 }}>
+                  {!u.role && <span style={{ fontSize: 10, fontWeight: 600, color: COLORS.orange, border: `1px solid ${COLORS.orange}`, borderRadius: 20, padding: "1px 8px" }}>MENUNGGU PERSETUJUAN</span>}
+                  {u.disabled && <span style={{ fontSize: 10, fontWeight: 600, color: COLORS.alert, border: `1px solid ${COLORS.alert}`, borderRadius: 20, padding: "1px 8px" }}>DINONAKTIFKAN</span>}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <select value={u.role || ""} onChange={(e) => updateRole(u.id, e.target.value)} style={{ ...inputStyle, width: 160 }}>
+                  <option value="">- Belum ditugaskan -</option>
+                  {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                </select>
+                <button
+                  style={{ ...btnGhost, color: u.disabled ? COLORS.success : COLORS.alert, borderColor: u.disabled ? COLORS.success : COLORS.alert }}
+                  onClick={() => toggleDisabled(u)}
+                >
+                  {u.disabled ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+                  {u.disabled ? "Aktifkan" : "Nonaktifkan"}
+                </button>
+              </div>
             </div>
           ))}
         </div>
       )}
+      <p style={{ color: COLORS.muted, fontSize: 11, marginTop: 14 }}>
+        Catatan: "Nonaktifkan" langsung memblokir akses akun ke aplikasi ini. Untuk menghapus akun secara permanen dari sistem login (bukan cuma diblokir), lakukan lewat Supabase Dashboard → Authentication → Users → pilih user → Delete — ini sengaja tidak dibuka lewat aplikasi karena butuh kunci admin yang tidak aman disimpan di kode web.
+      </p>
     </div>
   );
 }
@@ -2409,11 +2469,13 @@ function FinishedGoodsPanel({ data, setData, logAction, showToast }) {
   );
 }
 
-function ProfilePanel({ session, showToast }) {
+function ProfilePanel({ session, profile, setProfile, showToast }) {
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fullName, setFullName] = useState(profile?.full_name || "");
+  const [nameBusy, setNameBusy] = useState(false);
 
   async function changePassword() {
     setError("");
@@ -2428,12 +2490,27 @@ function ProfilePanel({ session, showToast }) {
     showToast("Password berhasil diubah");
   }
 
+  async function saveName() {
+    setNameBusy(true);
+    const { data, error: err } = await supabase.from("profiles").update({ full_name: fullName.trim() || null }).eq("id", session.user.id).select().single();
+    setNameBusy(false);
+    if (err) return showToast("Gagal simpan nama: " + err.message, true);
+    setProfile(data);
+    showToast("Nama profil disimpan");
+  }
+
   return (
     <div>
       <SectionTitle>Profil Saya</SectionTitle>
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, marginBottom: 16, maxWidth: 420 }}>
         <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 4 }}>Email</div>
-        <div style={{ fontFamily: "JetBrains Mono", fontSize: 14 }}>{session?.user?.email}</div>
+        <div style={{ fontFamily: "JetBrains Mono", fontSize: 14, marginBottom: 10 }}>{session?.user?.email}</div>
+        <Field label="Nama Tampilan">
+          <input style={inputStyle} value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="mis. Budi Santoso" />
+        </Field>
+        <button style={{ ...btnPrimary, marginTop: 10 }} disabled={nameBusy} onClick={saveName}>
+          <Save size={14} />{nameBusy ? "Menyimpan..." : "Simpan Nama"}
+        </button>
       </div>
 
       <div style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, maxWidth: 420 }}>
