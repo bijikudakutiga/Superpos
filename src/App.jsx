@@ -603,6 +603,7 @@ export default function App() {
           {toast.msg}
         </div>
       )}
+      <InstallPromptBanner />
     </div>
   );
 }
@@ -1644,6 +1645,7 @@ function LoginScreen() {
           </div>
         </div>
       </form>
+      <InstallPromptBanner />
     </div>
   );
 }
@@ -2528,6 +2530,95 @@ function ProfilePanel({ session, profile, setProfile, showToast }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function InstallPromptBanner() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showIOSHint, setShowIOSHint] = useState(false);
+  const [dismissedAt, setDismissedAt] = useState(() => {
+    try {
+      return localStorage.getItem("installPromptDismissedAt");
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    function handler(e) {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    }
+    window.addEventListener("beforeinstallprompt", handler);
+
+    const isIOS = /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream;
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
+    if (isIOS && !isStandalone) setShowIOSHint(true);
+
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+
+  const dismissedRecently = dismissedAt && Date.now() - parseInt(dismissedAt, 10) < 1000 * 60 * 60 * 24 * 7;
+
+  function dismiss() {
+    const now = String(Date.now());
+    try {
+      localStorage.setItem("installPromptDismissedAt", now);
+    } catch {}
+    setDismissedAt(now);
+  }
+
+  async function handleInstallClick() {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    setDeferredPrompt(null);
+    dismiss();
+  }
+
+  if (dismissedRecently) return null;
+  if (!deferredPrompt && !showIOSHint) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: 12,
+        right: 12,
+        bottom: 12,
+        zIndex: 50,
+        maxWidth: 420,
+        margin: "0 auto",
+        background: COLORS.ink,
+        color: "#FFFFFF",
+        borderRadius: 12,
+        padding: "12px 14px",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        boxShadow: "0 6px 20px rgba(0,0,0,0.35)",
+        fontFamily: "Inter",
+      }}
+    >
+      <img src="/icon-192.png" alt="" style={{ width: 36, height: 36, borderRadius: 8, flexShrink: 0 }} />
+      <div style={{ flex: 1, fontSize: 11.5, lineHeight: 1.4 }}>
+        {deferredPrompt ? (
+          <>Instal aplikasi ini di HP kamu untuk akses lebih cepat, seperti aplikasi biasa.</>
+        ) : (
+          <>
+            Tambahkan ke Layar Utama: tap ikon <b>Share</b> (kotak dengan panah ke atas) di Safari, lalu pilih <b>"Add to Home Screen"</b>.
+          </>
+        )}
+      </div>
+      {deferredPrompt && (
+        <button onClick={handleInstallClick} style={{ ...btnPrimary, padding: "7px 12px", fontSize: 12, flexShrink: 0 }}>
+          Instal
+        </button>
+      )}
+      <button onClick={dismiss} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0 }}>
+        <X size={16} />
+      </button>
     </div>
   );
 }
