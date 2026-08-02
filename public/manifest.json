@@ -1,7 +1,7 @@
 {
-  "name": "Ruang Kontrol Produksi",
-  "short_name": "RK Produksi",
-  "description": "Sistem POS, stok, resep, dan produksi",
+  "name": "Vijimoto",
+  "short_name": "Vijimoto",
+  "description": "Sistem POS, stok, resep, dan produksi Vijimoto",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#FFFFFF",
