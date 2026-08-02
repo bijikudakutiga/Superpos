@@ -491,7 +491,7 @@ export default function App() {
             <img src="/logo.png" alt="Logo" style={{ height: 44, width: "auto", flexShrink: 0, filter: "drop-shadow(1px 2px 2px rgba(0,0,0,0.3))" }} />
             <div>
               <div style={{ fontFamily: "Anton", fontSize: 24, letterSpacing: 1, color: "#FFFFFF", textShadow: "2px 2px 0 rgba(0,0,0,0.25)" }}>
-                RUANG KONTROL PRODUKSI
+                VIJIMOTO
               </div>
               <div style={{ fontSize: 12, color: "rgba(255,255,255,0.9)", marginTop: 3, fontWeight: 600 }}>Master Data · Stok · Resep · Batch · Opname</div>
             </div>
@@ -580,12 +580,12 @@ export default function App() {
 
       <main style={{ padding: 18, flex: 1 }}>
         {tab === "dashboard" && <Dashboard data={data} unitById={unitById} role={role} />}
-        {tab === "units" && <UnitsPanel data={data} setData={setData} showToast={showToast} />}
-        {tab === "materials" && <MaterialsPanel data={data} setData={setData} unitById={unitById} showToast={showToast} />}
+        {tab === "units" && <UnitsPanel data={data} setData={setData} role={role} showToast={showToast} />}
+        {tab === "materials" && <MaterialsPanel data={data} setData={setData} unitById={unitById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "finishedgoods" && <FinishedGoodsPanel data={data} setData={setData} logAction={logAction} showToast={showToast} />}
-        {tab === "suppliers" && <SuppliersPanel data={data} setData={setData} showToast={showToast} />}
-        {tab === "purchases" && <PurchasesPanel data={data} setData={setData} unitById={unitById} logAction={logAction} showToast={showToast} />}
-        {tab === "recipes" && <RecipesPanel data={data} setData={setData} unitById={unitById} rmById={rmById} showToast={showToast} />}
+        {tab === "suppliers" && <SuppliersPanel data={data} setData={setData} role={role} showToast={showToast} />}
+        {tab === "purchases" && <PurchasesPanel data={data} setData={setData} unitById={unitById} role={role} logAction={logAction} showToast={showToast} />}
+        {tab === "recipes" && <RecipesPanel data={data} setData={setData} unitById={unitById} rmById={rmById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "batchcreate" && <BatchCreatePanel data={data} setData={setData} unitById={unitById} rmById={rmById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "batchlist" && <BatchListPanel data={data} setData={setData} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "opname" && <OpnamePanel data={data} setData={setData} unitById={unitById} role={role} logAction={logAction} showToast={showToast} />}
@@ -762,7 +762,8 @@ function EmptyState({ text }) {
   return <div style={{ color: COLORS.muted, fontSize: 13, padding: "24px 0", textAlign: "center", border: `1px dashed ${COLORS.border}`, borderRadius: 10 }}>{text}</div>;
 }
 
-function UnitsPanel({ data, setData, showToast }) {
+function UnitsPanel({ data, setData, role, showToast }) {
+  const isSuperAdmin = role === "super_admin";
   const [form, setForm] = useState({ name: "", symbol: "", type: "berat", toBase: "" });
 
   function addUnit() {
@@ -774,6 +775,7 @@ function UnitsPanel({ data, setData, showToast }) {
   }
 
   function removeUnit(id) {
+    if (!isSuperAdmin) return showToast("Hanya Super Admin yang bisa menghapus satuan", true);
     const used = data.rawMaterials.some((r) => r.baseUnitId === id || r.purchaseUnitId === id) || data.recipes.some((rc) => rc.items.some((i) => i.unitId === id));
     if (used) return showToast("Satuan sedang dipakai, tidak bisa dihapus", true);
     setData({ ...data, units: data.units.filter((u) => u.id !== id) });
@@ -790,7 +792,9 @@ function UnitsPanel({ data, setData, showToast }) {
           <div key={u.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 10, position: "relative" }}>
             <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 15 }}>{u.name} ({u.symbol})</div>
             <div style={{ fontSize: 11, color: COLORS.muted }}>{TYPE_LABEL[u.type]} · 1 {u.symbol} = {u.toBase} x satuan dasar</div>
-            <button onClick={() => removeUnit(u.id)} style={{ position: "absolute", top: 6, right: 6, background: "none", border: "none", color: COLORS.muted, cursor: "pointer" }}><X size={14} /></button>
+            {isSuperAdmin && (
+              <button onClick={() => removeUnit(u.id)} style={{ position: "absolute", top: 6, right: 6, background: "none", border: "none", color: COLORS.muted, cursor: "pointer" }}><X size={14} /></button>
+            )}
           </div>
         ))}
       </div>
@@ -818,7 +822,8 @@ function UnitsPanel({ data, setData, showToast }) {
   );
 }
 
-function MaterialsPanel({ data, setData, unitById, showToast }) {
+function MaterialsPanel({ data, setData, unitById, role, logAction, showToast }) {
+  const isSuperAdmin = role === "super_admin";
   const emptyForm = { code: "", name: "", baseUnitId: "gram", purchaseUnitId: "kg", stock: "", minAlert: "", supplierId: "" };
   const [form, setForm] = useState(emptyForm);
 
@@ -831,9 +836,11 @@ function MaterialsPanel({ data, setData, unitById, showToast }) {
   }
 
   function removeMaterial(id) {
+    if (!isSuperAdmin) return showToast("Hanya Super Admin yang bisa menghapus bahan baku", true);
+    const rm = data.rawMaterials.find((r) => r.id === id);
     const used = data.recipes.some((rc) => rc.items.some((i) => i.rawMaterialId === id));
     if (used) return showToast("Dipakai di resep, tidak bisa dihapus", true);
-    setData({ ...data, rawMaterials: data.rawMaterials.filter((r) => r.id !== id) });
+    setData({ ...data, rawMaterials: data.rawMaterials.filter((r) => r.id !== id), auditLog: [logAction("Hapus Bahan Baku", rm?.name || id), ...(data.auditLog || [])].slice(0, 200) });
   }
 
   const baseUnits = data.units.filter((u) => u.toBase === 1);
@@ -880,7 +887,7 @@ function MaterialsPanel({ data, setData, unitById, showToast }) {
                   Stok: <span style={{ fontFamily: "JetBrains Mono", color: COLORS.ink }}>{rm.stock.toLocaleString("id-ID")} {base?.symbol}</span> · Beli dalam {purchase?.name} · Min: {rm.minAlert} {base?.symbol} {sup ? `· ${sup.name}` : ""}
                 </div>
               </div>
-              <button onClick={() => removeMaterial(rm.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>
+              {isSuperAdmin && <button onClick={() => removeMaterial(rm.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>}
             </div>
           );
         })}
@@ -914,7 +921,8 @@ function MaterialsPanel({ data, setData, unitById, showToast }) {
   );
 }
 
-function SuppliersPanel({ data, setData, showToast }) {
+function SuppliersPanel({ data, setData, role, showToast }) {
+  const isSuperAdmin = role === "super_admin";
   const [form, setForm] = useState({ name: "", phone: "", contactPerson: "", address: "" });
 
   function add() {
@@ -924,6 +932,7 @@ function SuppliersPanel({ data, setData, showToast }) {
     showToast("Supplier ditambahkan");
   }
   function remove(id) {
+    if (!isSuperAdmin) return showToast("Hanya Super Admin yang bisa menghapus supplier", true);
     const used = data.rawMaterials.some((r) => r.supplierId === id);
     if (used) return showToast("Supplier dipakai bahan baku, tidak bisa dihapus", true);
     setData({ ...data, suppliers: data.suppliers.filter((s) => s.id !== id) });
@@ -940,7 +949,7 @@ function SuppliersPanel({ data, setData, showToast }) {
               <div style={{ fontSize: 12, color: COLORS.muted }}>{s.contactPerson ? `${s.contactPerson} · ` : ""}{s.phone || "-"}</div>
               {s.address && <div style={{ fontSize: 11.5, color: COLORS.muted }}>{s.address}</div>}
             </div>
-            <button onClick={() => remove(s.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>
+            {isSuperAdmin && <button onClick={() => remove(s.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>}
           </div>
         ))}
         {data.suppliers.length === 0 && <EmptyState text="Belum ada supplier." />}
@@ -956,7 +965,8 @@ function SuppliersPanel({ data, setData, showToast }) {
   );
 }
 
-function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
+function RecipesPanel({ data, setData, unitById, rmById, role, logAction, showToast }) {
+  const isSuperAdmin = role === "super_admin";
   const [name, setName] = useState("");
   const [yieldQty, setYieldQty] = useState("");
   const [minFinishedStock, setMinFinishedStock] = useState("");
@@ -989,7 +999,9 @@ function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
   }
 
   function removeRecipe(id) {
-    setData({ ...data, recipes: data.recipes.filter((r) => r.id !== id) });
+    if (!isSuperAdmin) return showToast("Hanya Super Admin yang bisa menghapus resep", true);
+    const r = data.recipes.find((x) => x.id === id);
+    setData({ ...data, recipes: data.recipes.filter((r) => r.id !== id), auditLog: [logAction("Hapus Resep", r?.name || id), ...(data.auditLog || [])].slice(0, 200) });
   }
 
   function forecastFor(recipe) {
@@ -1052,7 +1064,7 @@ function RecipesPanel({ data, setData, unitById, rmById, showToast }) {
                   );
                 })}
               </div>
-              <button onClick={() => removeRecipe(r.id)} style={{ ...btnGhost, marginTop: 10 }}><Trash2 size={14} />Hapus resep</button>
+              {isSuperAdmin && <button onClick={() => removeRecipe(r.id)} style={{ ...btnGhost, marginTop: 10 }}><Trash2 size={14} />Hapus resep</button>}
             </div>
           );
         })}
@@ -1222,6 +1234,7 @@ function BatchListPanel({ data, setData, role, logAction, showToast }) {
   }
 
   function deleteBatch(id) {
+    if (role !== "super_admin") return showToast("Hanya Super Admin yang bisa menghapus batch", true);
     setData({ ...data, batches: data.batches.filter((b) => b.id !== id) });
   }
 
@@ -1260,7 +1273,7 @@ function BatchListPanel({ data, setData, role, logAction, showToast }) {
             {b.status === "planned" && allowed && finishing !== b.id && (
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button style={btnPrimary} onClick={() => startFinish(b)}><CheckCircle2 size={15} />Selesaikan Batch</button>
-                <button style={btnGhost} onClick={() => deleteBatch(b.id)}><Trash2 size={14} />Hapus</button>
+                {role === "super_admin" && <button style={btnGhost} onClick={() => deleteBatch(b.id)}><Trash2 size={14} />Hapus</button>}
               </div>
             )}
             {finishing === b.id && (
@@ -1614,7 +1627,7 @@ function LoginScreen() {
         <div style={{ position: "absolute", top: -30, right: -30, width: 100, height: 100, background: COLORS.crimson, transform: "rotate(45deg)" }} />
         <div style={{ position: "relative", zIndex: 1 }}>
           <img src="/logo.png" alt="Logo" style={{ height: 40, width: "auto", marginBottom: 10 }} />
-          <div style={{ fontFamily: "Anton", fontSize: 24, color: COLORS.ink, marginBottom: 2 }}>RUANG KONTROL PRODUKSI</div>
+          <div style={{ fontFamily: "Anton", fontSize: 24, color: COLORS.ink, marginBottom: 2 }}>VIJIMOTO</div>
           <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 18 }}>
             {mode === "login" ? "Masuk ke akun kamu" : "Daftar akun baru — akses baru aktif setelah ditugaskan role oleh Super Admin"}
           </div>
@@ -1956,7 +1969,7 @@ function generatePOExcel(po, supplier, company) {
   XLSX.writeFile(wb, `${po.poNumber}.xlsx`);
 }
 
-function PurchasesPanel({ data, setData, unitById, logAction, showToast }) {
+function PurchasesPanel({ data, setData, unitById, role, logAction, showToast }) {
   const emptyItemRow = () => ({ id: uid("poi"), rawMaterialId: data.rawMaterials[0]?.id || "", packSize: "", packCount: "", pricePerPack: "" });
   const [supplierId, setSupplierId] = useState(data.suppliers[0]?.id || "");
   const [shippedToAddress, setShippedToAddress] = useState("");
@@ -2045,6 +2058,7 @@ function PurchasesPanel({ data, setData, unitById, logAction, showToast }) {
   }
 
   function cancelPO(id) {
+    if (role !== "super_admin") return showToast("Hanya Super Admin yang bisa membatalkan PO", true);
     setData({ ...data, purchases: data.purchases.filter((p) => p.id !== id) });
   }
 
@@ -2168,7 +2182,7 @@ function PurchasesPanel({ data, setData, unitById, logAction, showToast }) {
                 {po.status === "ordered" && (
                   <>
                     <button style={btnPrimary} onClick={() => receivePO(po)}><CheckCircle2 size={15} />Tandai Diterima</button>
-                    <button style={btnGhost} onClick={() => cancelPO(po.id)}><Trash2 size={14} />Batalkan</button>
+                    {role === "super_admin" && <button style={btnGhost} onClick={() => cancelPO(po.id)}><Trash2 size={14} />Batalkan</button>}
                   </>
                 )}
               </div>
@@ -2233,6 +2247,7 @@ function PettyCashPanel({ data, setData, role, logAction, showToast }) {
   }
 
   function removeEntry(id) {
+    if (role !== "super_admin") return showToast("Hanya Super Admin yang bisa menghapus catatan kas", true);
     setData({ ...data, pettyCash: (data.pettyCash || []).filter((e) => e.id !== id) });
   }
 
@@ -2309,7 +2324,7 @@ function PettyCashPanel({ data, setData, role, logAction, showToast }) {
               <span style={{ fontFamily: "JetBrains Mono", fontSize: 14, color: e.type === "masuk" ? COLORS.success : COLORS.alert }}>
                 {e.type === "masuk" ? "+" : "-"}Rp{e.amount.toLocaleString("id-ID")}
               </span>
-              <button onClick={() => removeEntry(e.id)} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer" }}><Trash2 size={14} /></button>
+              {role === "super_admin" && <button onClick={() => removeEntry(e.id)} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer" }}><Trash2 size={14} /></button>}
             </div>
           </div>
         ))}
@@ -2347,6 +2362,21 @@ function OrderListPanel({ data, setData, role, logAction, showToast }) {
       auditLog: [logAction("Update Status Order", `${order.orderNumber} → ${nextLabel}`), ...(data.auditLog || [])].slice(0, 200),
     });
     showToast(`Order ${order.orderNumber} → ${nextLabel}`);
+  }
+
+  function deleteOrder(order) {
+    if (role !== "super_admin") return showToast("Hanya Super Admin yang bisa menghapus order", true);
+    const updatedRecipes = data.recipes.map((r) => {
+      const it = order.items.find((i) => i.recipeId === r.id);
+      return it ? { ...r, finishedStock: (r.finishedStock || 0) + it.qty } : r;
+    });
+    setData({
+      ...data,
+      recipes: updatedRecipes,
+      sales: data.sales.filter((s) => s.id !== order.id),
+      auditLog: [logAction("Hapus Order", order.orderNumber), ...(data.auditLog || [])].slice(0, 200),
+    });
+    showToast(`Order ${order.orderNumber} dihapus, stok barang jadi dikembalikan`);
   }
 
   function buildExportRows() {
@@ -2409,6 +2439,9 @@ function OrderListPanel({ data, setData, role, logAction, showToast }) {
                   <button style={btnPrimary} onClick={() => advance(o)}>
                     <CheckCircle2 size={14} />Lanjut ke {ORDER_STATUSES.find((s) => s.id === next)?.label}
                   </button>
+                )}
+                {role === "super_admin" && (
+                  <button style={btnGhost} onClick={() => deleteOrder(o)}><Trash2 size={14} />Hapus</button>
                 )}
               </div>
             </div>
