@@ -1732,6 +1732,17 @@ function UsersPanel({ showToast }) {
     showToast(nextDisabled ? "Akun dinonaktifkan" : "Akun diaktifkan kembali");
   }
 
+  async function deletePermanently(u) {
+    const sure = window.confirm(`Hapus PERMANEN akun ${u.full_name || u.email}? Aksi ini tidak bisa dibatalkan.`);
+    if (!sure) return;
+    const { data: result, error } = await supabase.functions.invoke("delete-user", { body: { userId: u.id } });
+    if (error || result?.error) {
+      return showToast("Gagal hapus akun: " + (result?.error || error.message) + " — pastikan Edge Function 'delete-user' sudah di-deploy.", true);
+    }
+    setUsers((prev) => prev.filter((x) => x.id !== u.id));
+    showToast("Akun dihapus permanen");
+  }
+
   const sortedUsers = users ? [...users].sort((a, b) => {
     const aPending = !a.role ? 0 : 1;
     const bPending = !b.role ? 0 : 1;
@@ -1774,13 +1785,18 @@ function UsersPanel({ showToast }) {
                   {u.disabled ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
                   {u.disabled ? "Aktifkan" : "Nonaktifkan"}
                 </button>
+                {u.disabled && (
+                  <button style={{ ...btnGhost, color: COLORS.alert, borderColor: COLORS.alert }} onClick={() => deletePermanently(u)}>
+                    <Trash2 size={14} />Hapus Permanen
+                  </button>
+                )}
               </div>
             </div>
           ))}
         </div>
       )}
       <p style={{ color: COLORS.muted, fontSize: 11, marginTop: 14 }}>
-        Catatan: "Nonaktifkan" langsung memblokir akses akun ke aplikasi ini. Untuk menghapus akun secara permanen dari sistem login (bukan cuma diblokir), lakukan lewat Supabase Dashboard → Authentication → Users → pilih user → Delete — ini sengaja tidak dibuka lewat aplikasi karena butuh kunci admin yang tidak aman disimpan di kode web.
+        Catatan: "Nonaktifkan" langsung memblokir akses akun ke aplikasi ini — cara paling aman dan cepat untuk mencabut akses. "Hapus Permanen" (hanya muncul untuk akun yang sudah dinonaktifkan) akan menghapus akun itu sepenuhnya dari sistem login dan tidak bisa dibatalkan. Fitur ini butuh 1x setup tambahan di Supabase (Edge Function) — lihat file <code>supabase/functions/delete-user/index.ts</code> di project untuk instruksinya.
       </p>
     </div>
   );
@@ -2057,9 +2073,14 @@ function PurchasesPanel({ data, setData, unitById, role, logAction, showToast })
     showToast("Barang diterima, stok & harga bahan baku diperbarui");
   }
 
-  function cancelPO(id) {
-    if (role !== "super_admin") return showToast("Hanya Super Admin yang bisa membatalkan PO", true);
-    setData({ ...data, purchases: data.purchases.filter((p) => p.id !== id) });
+  function deletePO(po) {
+    if (role !== "super_admin") return showToast("Hanya Super Admin yang bisa menghapus PO", true);
+    setData({
+      ...data,
+      purchases: data.purchases.filter((p) => p.id !== po.id),
+      auditLog: [logAction("Hapus PO", po.poNumber), ...(data.auditLog || [])].slice(0, 200),
+    });
+    showToast(`PO ${po.poNumber} dihapus`);
   }
 
   function saveCompanyProfile() {
@@ -2095,6 +2116,9 @@ function PurchasesPanel({ data, setData, unitById, role, logAction, showToast })
       <SectionTitle action={<button style={btnGhost} onClick={() => setEditingCompany(!editingCompany)}><Settings size={14} />Info Perusahaan</button>}>
         Buat PO
       </SectionTitle>
+      <p style={{ color: COLORS.muted, fontSize: 11.5, marginTop: -8, marginBottom: 14 }}>
+        Catatan: menghapus PO yang statusnya sudah "Diterima" hanya menghapus catatannya saja — stok bahan baku yang sudah masuk TIDAK otomatis dikoreksi. Kalau perlu, sesuaikan stoknya lewat menu Stock Opname.
+      </p>
 
       {editingCompany && (
         <div style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, marginBottom: 16, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2180,10 +2204,10 @@ function PurchasesPanel({ data, setData, unitById, role, logAction, showToast })
                 <button style={btnGhost} onClick={() => generatePOPdf(po, sup, data.companyProfile || {})}><Download size={14} />Surat PO (PDF)</button>
                 <button style={btnGhost} onClick={() => generatePOExcel(po, sup, data.companyProfile || {})}><Download size={14} />Surat PO (Excel)</button>
                 {po.status === "ordered" && (
-                  <>
-                    <button style={btnPrimary} onClick={() => receivePO(po)}><CheckCircle2 size={15} />Tandai Diterima</button>
-                    {role === "super_admin" && <button style={btnGhost} onClick={() => cancelPO(po.id)}><Trash2 size={14} />Batalkan</button>}
-                  </>
+                  <button style={btnPrimary} onClick={() => receivePO(po)}><CheckCircle2 size={15} />Tandai Diterima</button>
+                )}
+                {role === "super_admin" && (
+                  <button style={btnGhost} onClick={() => deletePO(po)}><Trash2 size={14} />Hapus</button>
                 )}
               </div>
             </div>
