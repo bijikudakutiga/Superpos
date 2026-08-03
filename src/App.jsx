@@ -244,7 +244,6 @@ export default function App() {
   function normalize(parsed) {
     return {
       sales: [],
-      purchases: [],
       pettyCash: [],
       auditLog: [],
       permissions: DEFAULT_PERMISSIONS,
@@ -1233,14 +1232,22 @@ function BatchListPanel({ data, setData, role, logAction, showToast }) {
     showToast("Batch selesai, HPP Rp" + Math.round(hppTotal).toLocaleString("id-ID") + " total");
   }
 
-  function deleteBatch(id) {
+  function deleteBatch(b) {
     if (role !== "super_admin") return showToast("Hanya Super Admin yang bisa menghapus batch", true);
-    setData({ ...data, batches: data.batches.filter((b) => b.id !== id) });
+    setData({
+      ...data,
+      batches: data.batches.filter((x) => x.id !== b.id),
+      auditLog: [logAction("Hapus Batch", `${b.batchNumber} · ${b.recipeName}`), ...(data.auditLog || [])].slice(0, 200),
+    });
+    showToast(`Batch ${b.batchNumber} dihapus`);
   }
 
   return (
     <div>
       <SectionTitle>List Antrean Produksi</SectionTitle>
+      <p style={{ color: COLORS.muted, fontSize: 11.5, marginTop: -8, marginBottom: 14 }}>
+        Catatan: menghapus batch yang statusnya sudah "Selesai" hanya menghapus catatannya — stok bahan baku yang terpakai dan stok produk jadi yang dihasilkan TIDAK otomatis dikoreksi. Sesuaikan manual lewat Stock Opname kalau perlu.
+      </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {data.batches.map((b) => (
           <div key={b.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
@@ -1273,7 +1280,11 @@ function BatchListPanel({ data, setData, role, logAction, showToast }) {
             {b.status === "planned" && allowed && finishing !== b.id && (
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button style={btnPrimary} onClick={() => startFinish(b)}><CheckCircle2 size={15} />Selesaikan Batch</button>
-                {role === "super_admin" && <button style={btnGhost} onClick={() => deleteBatch(b.id)}><Trash2 size={14} />Hapus</button>}
+              </div>
+            )}
+            {role === "super_admin" && finishing !== b.id && (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button style={btnGhost} onClick={() => deleteBatch(b)}><Trash2 size={14} />Hapus</button>
               </div>
             )}
             {finishing === b.id && (
