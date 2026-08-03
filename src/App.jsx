@@ -92,7 +92,7 @@ const ROLES = [
 ];
 function canApprove(role) { return role === "manager" || role === "super_admin"; }
 function canInputOpname(role) { return role === "warehouse" || role === "produksi" || role === "super_admin"; }
-function canManageBatch(role) { return role === "produksi" || role === "super_admin"; }
+function canManageBatch(role) { return role === "produksi" || role === "manager" || role === "super_admin"; }
 
 const MODULES = [
   { id: "dashboard", label: "Dasbor" },
@@ -238,6 +238,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [dbConnected, setDbConnected] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [staffList, setStaffList] = useState([]);
   const [retryCount, setRetryCount] = useState(0);
   const saveTimer = useRef(null);
 
@@ -308,6 +309,17 @@ export default function App() {
         setProfile(created || null);
         setRole(created?.role || null);
       }
+    })();
+  }, [session]);
+
+  useEffect(() => {
+    if (!supabase || !session) {
+      setStaffList([]);
+      return;
+    }
+    (async () => {
+      const { data: rows, error } = await supabase.from("profiles").select("id, email, full_name, role, disabled");
+      if (!error) setStaffList(rows || []);
     })();
   }, [session]);
 
@@ -578,15 +590,15 @@ export default function App() {
       )}
 
       <main style={{ padding: 18, flex: 1 }}>
-        {tab === "dashboard" && <Dashboard data={data} unitById={unitById} role={role} />}
+        {tab === "dashboard" && <Dashboard data={data} unitById={unitById} role={role} staffList={staffList} session={session} />}
         {tab === "units" && <UnitsPanel data={data} setData={setData} role={role} showToast={showToast} />}
         {tab === "materials" && <MaterialsPanel data={data} setData={setData} unitById={unitById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "finishedgoods" && <FinishedGoodsPanel data={data} setData={setData} logAction={logAction} showToast={showToast} />}
         {tab === "suppliers" && <SuppliersPanel data={data} setData={setData} role={role} showToast={showToast} />}
         {tab === "purchases" && <PurchasesPanel data={data} setData={setData} unitById={unitById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "recipes" && <RecipesPanel data={data} setData={setData} unitById={unitById} rmById={rmById} role={role} logAction={logAction} showToast={showToast} />}
-        {tab === "batchcreate" && <BatchCreatePanel data={data} setData={setData} unitById={unitById} rmById={rmById} role={role} logAction={logAction} showToast={showToast} />}
-        {tab === "batchlist" && <BatchListPanel data={data} setData={setData} role={role} logAction={logAction} showToast={showToast} />}
+        {tab === "batchcreate" && <BatchCreatePanel data={data} setData={setData} unitById={unitById} rmById={rmById} role={role} staffList={staffList} logAction={logAction} showToast={showToast} />}
+        {tab === "batchlist" && <BatchListPanel data={data} setData={setData} role={role} staffList={staffList} logAction={logAction} showToast={showToast} />}
         {tab === "opname" && <OpnamePanel data={data} setData={setData} unitById={unitById} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "pos" && <PosPanel data={data} setData={setData} role={role} logAction={logAction} showToast={showToast} />}
         {tab === "orderlist" && <OrderListPanel data={data} setData={setData} role={role} logAction={logAction} showToast={showToast} />}
@@ -616,13 +628,17 @@ function SectionTitle({ children, action }) {
   );
 }
 
-function Dashboard({ data, unitById, role }) {
+function Dashboard({ data, unitById, role, staffList, session }) {
   const finishedStockData = data.recipes.map((r) => ({ name: r.name, qty: r.finishedStock || 0, min: r.minFinishedStock || 0 }));
   const orders = (data.sales || []).map((o) => ({ ...o, status: o.status || "masuk" }));
   const orderCounts = ORDER_STATUSES.reduce((acc, s) => {
     acc[s.id] = orders.filter((o) => o.status === s.id).length;
     return acc;
   }, {});
+
+  const myUserId = session?.user?.id;
+  const upcomingBatches = [...(data.batches || [])].sort((a, b) => (a.scheduledDate || "").localeCompare(b.scheduledDate || ""));
+  const myTasks = myUserId ? upcomingBatches.filter((b) => (b.assignedTo || []).includes(myUserId)) : [];
 
   const now = new Date();
   const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -649,6 +665,53 @@ function Dashboard({ data, unitById, role }) {
 
   return (
     <div>
+      {role === "produksi" && (
+        <>
+          <SectionTitle>Tugas Produksi Saya</SectionTitle>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+            {myTasks.length === 0 ? (
+              <EmptyState text="Belum ada jadwal produksi yang ditugaskan ke kamu." />
+            ) : (
+              myTasks.map((b) => (
+                <div key={b.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontFamily: "Anton", fontSize: 15 }}>{b.recipeName} · x{b.multiplier}</div>
+                    {b.scheduledDate && (
+                      <div style={{ fontSize: 11.5, color: COLORS.muted, display: "flex", alignItems: "center", gap: 4 }}>
+                        <CalendarDays size={12} />{new Date(b.scheduledDate).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}
+                      </div>
+                    )}
+                  </div>
+                  <StatusBadge status={b.status} />
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+
+      <SectionTitle>Jadwal Produksi</SectionTitle>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+        {upcomingBatches.length === 0 ? (
+          <EmptyState text="Belum ada jadwal produksi." />
+        ) : (
+          upcomingBatches.slice(0, 8).map((b) => (
+            <div key={b.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontFamily: "Anton", fontSize: 15 }}>{b.recipeName} · x{b.multiplier}</div>
+                {b.scheduledDate && (
+                  <div style={{ fontSize: 11.5, color: COLORS.muted, display: "flex", alignItems: "center", gap: 4 }}>
+                    <CalendarDays size={12} />{new Date(b.scheduledDate).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}
+                  </div>
+                )}
+                <div style={{ fontSize: 11.5, color: COLORS.orange, marginTop: 2 }}>{resolveStaffNames(b.assignedTo, staffList || [])}</div>
+              </div>
+              <StatusBadge status={b.status} />
+            </div>
+          ))
+        )}
+      </div>
+
       <SectionTitle>Rekap Penjualan per SKU</SectionTitle>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginBottom: 22 }}>
         <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
@@ -1122,13 +1185,19 @@ function StatusBadge({ status }) {
   );
 }
 
-function BatchCreatePanel({ data, setData, unitById, rmById, role, logAction, showToast }) {
+function BatchCreatePanel({ data, setData, unitById, rmById, role, staffList, logAction, showToast }) {
   const allowed = canManageBatch(role);
   const [recipeId, setRecipeId] = useState(data.recipes[0]?.id || "");
   const [multiplier, setMultiplier] = useState("1");
   const [scheduledDate, setScheduledDate] = useState(new Date().toISOString().slice(0, 10));
+  const [assignedTo, setAssignedTo] = useState([]);
 
   const recipe = data.recipes.find((r) => r.id === recipeId);
+  const produksiStaff = (staffList || []).filter((s) => s.role === "produksi" && !s.disabled);
+
+  function toggleAssignee(id) {
+    setAssignedTo((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
 
   function requiredItems(rc, mult) {
     return rc.items.map((it) => {
@@ -1155,6 +1224,7 @@ function BatchCreatePanel({ data, setData, unitById, rmById, role, logAction, sh
       recipeName: recipe.name,
       multiplier: mult,
       scheduledDate,
+      assignedTo,
       plannedOutput: mult * recipe.yieldQty,
       actualOutput: null,
       rejectQty: 0,
@@ -1165,9 +1235,10 @@ function BatchCreatePanel({ data, setData, unitById, rmById, role, logAction, sh
     setData({
       ...data,
       batches: [batch, ...data.batches],
-      auditLog: [logAction("Buat Jadwal Produksi", `${batch.batchNumber} · ${batch.recipeName}`), ...(data.auditLog || [])].slice(0, 200),
+      auditLog: [logAction("Buat Jadwal Produksi", `${batch.batchNumber} · ${batch.recipeName} · ditugaskan ke: ${resolveStaffNames(assignedTo, staffList || [])}`), ...(data.auditLog || [])].slice(0, 200),
     });
     setMultiplier("1");
+    setAssignedTo([]);
     showToast("Jadwal produksi dibuat: " + batch.batchNumber);
   }
 
@@ -1185,13 +1256,35 @@ function BatchCreatePanel({ data, setData, unitById, rmById, role, logAction, sh
         <Field label="Jumlah batch (kelipatan resep)"><input style={{ ...inputStyle, width: 100 }} type="number" value={multiplier} onChange={(e) => setMultiplier(e.target.value)} /></Field>
         <Field label="Tanggal jadwal produksi"><input style={inputStyle} type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} /></Field>
         {recipe && <div style={{ fontSize: 12, color: COLORS.muted }}>Output rencana: <b style={{ color: COLORS.ink }}>{(parseFloat(multiplier) || 0) * recipe.yieldQty}</b> unit</div>}
+
+        <div style={{ width: "100%" }}>
+          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 6 }}>Tugaskan ke (bisa pilih lebih dari 1 orang)</div>
+          {!supabase ? (
+            <div style={{ fontSize: 12, color: COLORS.muted }}>Fitur assign staf butuh koneksi Supabase (mode lokal belum mendukung ini).</div>
+          ) : produksiStaff.length === 0 ? (
+            <div style={{ fontSize: 12, color: COLORS.muted }}>Belum ada akun dengan role Produksi. Tugaskan role di menu Kelola Pengguna dulu.</div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {produksiStaff.map((s) => {
+                const checked = assignedTo.includes(s.id);
+                return (
+                  <label key={s.id} style={{ display: "flex", alignItems: "center", gap: 6, background: checked ? COLORS.panel : "transparent", border: `1px solid ${checked ? COLORS.crimson : COLORS.border}`, borderRadius: 20, padding: "5px 12px", cursor: "pointer", fontSize: 12.5 }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleAssignee(s.id)} style={{ accentColor: COLORS.crimson }} />
+                    {staffLabel(s)}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <button style={btnPrimary} onClick={createBatch} disabled={!allowed}><Plus size={16} />Buat Jadwal</button>
       </div>
     </div>
   );
 }
 
-function BatchListPanel({ data, setData, role, logAction, showToast }) {
+function BatchListPanel({ data, setData, role, staffList, logAction, showToast }) {
   const allowed = canManageBatch(role);
   const [finishing, setFinishing] = useState(null); // batch id being finished
   const [actualOutput, setActualOutput] = useState("");
@@ -1256,6 +1349,7 @@ function BatchListPanel({ data, setData, role, logAction, showToast }) {
                 <div style={{ fontFamily: "JetBrains Mono", fontSize: 13, color: COLORS.crimson }}>{b.batchNumber}</div>
                 <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{b.recipeName} · x{b.multiplier}</div>
                 {b.scheduledDate && <div style={{ fontSize: 11.5, color: COLORS.muted, display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}><CalendarDays size={12} />{new Date(b.scheduledDate).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}</div>}
+                <div style={{ fontSize: 11.5, color: COLORS.orange, marginTop: 2 }}>Ditugaskan ke: {resolveStaffNames(b.assignedTo, staffList || [])}</div>
               </div>
               <StatusBadge status={b.status} />
             </div>
@@ -1815,6 +1909,15 @@ function UsersPanel({ showToast }) {
 
 function formatRupiah(n) {
   return "Rp" + Math.round(n || 0).toLocaleString("id-ID");
+}
+
+function staffLabel(staff) {
+  return staff?.full_name || staff?.email || "(pengguna tidak ditemukan)";
+}
+
+function resolveStaffNames(ids, staffList) {
+  if (!ids || ids.length === 0) return "Belum ditugaskan";
+  return ids.map((id) => staffLabel(staffList.find((s) => s.id === id))).join(", ");
 }
 
 function poTotals(po) {
