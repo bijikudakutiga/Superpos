@@ -891,7 +891,7 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
 
   function addMaterial() {
     if (!form.code || !form.name || !form.stock) return showToast("Lengkapi kode, nama, dan stok awal", true);
-    const rm = { id: uid("rm"), code: form.code, name: form.name, baseUnitId: form.baseUnitId, purchaseUnitId: form.purchaseUnitId, stock: parseFloat(form.stock) || 0, minAlert: parseFloat(form.minAlert) || 0, supplierId: form.supplierId || null };
+    const rm = { id: uid("rm"), code: form.code, name: form.name, baseUnitId: form.baseUnitId, purchaseUnitId: form.purchaseUnitId, stock: parseFloat(form.stock) || 0, minAlert: parseFloat(form.minAlert) || 0, supplierId: form.supplierId || null, lastPrice: 0, priceHistory: [] };
     setData({ ...data, rawMaterials: [...data.rawMaterials, rm] });
     setForm(emptyForm);
     showToast("Bahan baku ditambahkan");
@@ -1049,8 +1049,11 @@ function RecipesPanel({ data, setData, unitById, rmById, role, logAction, showTo
     for (const it of items) {
       if (!it.rawMaterialId || !it.qty || !it.unitId) return showToast("Setiap item harus punya bahan baku, qty, dan satuan", true);
       const rm = rmById(it.rawMaterialId);
+      if (!rm) return showToast("Bahan baku yang dipilih tidak ditemukan, silakan pilih ulang dari daftar", true);
       const itemUnit = unitById(it.unitId);
+      if (!itemUnit) return showToast("Satuan yang dipilih tidak ditemukan, silakan pilih ulang", true);
       const rmBaseUnit = unitById(rm.baseUnitId);
+      if (!rmBaseUnit) return showToast(`Satuan dasar untuk ${rm.name} tidak valid, cek data bahan baku ini`, true);
       if (itemUnit.type !== rmBaseUnit.type) return showToast(`Satuan untuk ${rm.name} tidak sesuai tipe (harus ${TYPE_LABEL[rmBaseUnit.type]})`, true);
     }
     const recipe = { id: uid("rcp"), name, yieldQty: parseFloat(yieldQty), minFinishedStock: parseFloat(minFinishedStock) || 0, finishedStock: 0, items: items.map((i) => ({ ...i, qty: parseFloat(i.qty) })) };
