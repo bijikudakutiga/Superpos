@@ -888,7 +888,7 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
   const isSuperAdmin = role === "super_admin";
   const baseUnitsAll = data.units.filter((u) => u.toBase === 1);
   function freshForm() {
-    return { code: "", name: "", baseUnitId: baseUnitsAll[0]?.id || "", purchaseUnitId: data.units[0]?.id || "", stock: "", minAlert: "", supplierId: "" };
+    return { code: "", name: "", baseUnitId: baseUnitsAll[0]?.id || "", purchaseUnitId: data.units[0]?.id || "", stock: "", minAlert: "", supplierId: "", initialPrice: "" };
   }
   const [form, setForm] = useState(freshForm);
   const [editingId, setEditingId] = useState(null);
@@ -898,7 +898,8 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
     if (!form.code || !form.name || !form.stock) return showToast("Lengkapi kode, nama, dan stok awal", true);
     if (!unitById(form.baseUnitId)) return showToast("Satuan dasar tidak valid, pilih ulang dari dropdown", true);
     if (!unitById(form.purchaseUnitId)) return showToast("Satuan beli tidak valid, pilih ulang dari dropdown", true);
-    const rm = { id: uid("rm"), code: form.code, name: form.name, baseUnitId: form.baseUnitId, purchaseUnitId: form.purchaseUnitId, stock: parseFloat(form.stock) || 0, minAlert: parseFloat(form.minAlert) || 0, supplierId: form.supplierId || null, lastPrice: 0, priceHistory: [] };
+    const initialPrice = parseFloat(form.initialPrice) || 0;
+    const rm = { id: uid("rm"), code: form.code, name: form.name, baseUnitId: form.baseUnitId, purchaseUnitId: form.purchaseUnitId, stock: parseFloat(form.stock) || 0, minAlert: parseFloat(form.minAlert) || 0, supplierId: form.supplierId || null, lastPrice: initialPrice, priceHistory: initialPrice > 0 ? [{ price: initialPrice, date: new Date().toISOString() }] : [] };
     setData({ ...data, rawMaterials: [...data.rawMaterials, rm] });
     setForm(freshForm());
     showToast("Bahan baku ditambahkan");
@@ -906,7 +907,7 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
 
   function startEdit(rm) {
     setEditingId(rm.id);
-    setEditForm({ code: rm.code, name: rm.name, baseUnitId: unitById(rm.baseUnitId) ? rm.baseUnitId : (baseUnitsAll[0]?.id || ""), purchaseUnitId: unitById(rm.purchaseUnitId) ? rm.purchaseUnitId : (data.units[0]?.id || ""), minAlert: rm.minAlert, supplierId: rm.supplierId || "" });
+    setEditForm({ code: rm.code, name: rm.name, baseUnitId: unitById(rm.baseUnitId) ? rm.baseUnitId : (baseUnitsAll[0]?.id || ""), purchaseUnitId: unitById(rm.purchaseUnitId) ? rm.purchaseUnitId : (data.units[0]?.id || ""), minAlert: rm.minAlert, supplierId: rm.supplierId || "", lastPrice: rm.lastPrice || "" });
   }
   function cancelEdit() {
     setEditingId(null);
@@ -916,9 +917,24 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
     if (!editForm.code || !editForm.name) return showToast("Kode dan nama wajib diisi", true);
     if (!unitById(editForm.baseUnitId)) return showToast("Satuan dasar tidak valid, pilih ulang dari dropdown", true);
     if (!unitById(editForm.purchaseUnitId)) return showToast("Satuan beli tidak valid, pilih ulang dari dropdown", true);
+    const newPrice = parseFloat(editForm.lastPrice) || 0;
     setData({
       ...data,
-      rawMaterials: data.rawMaterials.map((r) => (r.id === id ? { ...r, code: editForm.code, name: editForm.name, baseUnitId: editForm.baseUnitId, purchaseUnitId: editForm.purchaseUnitId, minAlert: parseFloat(editForm.minAlert) || 0, supplierId: editForm.supplierId || null } : r)),
+      rawMaterials: data.rawMaterials.map((r) => {
+        if (r.id !== id) return r;
+        const priceChanged = newPrice > 0 && newPrice !== (r.lastPrice || 0);
+        return {
+          ...r,
+          code: editForm.code,
+          name: editForm.name,
+          baseUnitId: editForm.baseUnitId,
+          purchaseUnitId: editForm.purchaseUnitId,
+          minAlert: parseFloat(editForm.minAlert) || 0,
+          supplierId: editForm.supplierId || null,
+          lastPrice: newPrice,
+          priceHistory: priceChanged ? [{ price: newPrice, date: new Date().toISOString() }, ...(r.priceHistory || [])].slice(0, 50) : (r.priceHistory || []),
+        };
+      }),
     });
     cancelEdit();
     showToast("Bahan baku diperbarui");
@@ -987,6 +1003,7 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
                   </select>
                 </Field>
                 <Field label="Min. stok"><input style={{ ...inputStyle, width: 90 }} type="number" value={editForm.minAlert} onChange={(e) => setEditForm({ ...editForm, minAlert: e.target.value })} /></Field>
+                <Field label="Harga / satuan beli"><input style={{ ...inputStyle, width: 120 }} type="number" value={editForm.lastPrice} onChange={(e) => setEditForm({ ...editForm, lastPrice: e.target.value })} /></Field>
                 <Field label="Supplier">
                   <select style={inputStyle} value={editForm.supplierId} onChange={(e) => setEditForm({ ...editForm, supplierId: e.target.value })}>
                     <option value="">-</option>
@@ -1004,6 +1021,9 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
                 <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{rm.name} <span style={{ color: COLORS.muted, fontSize: 12 }}>({rm.code})</span></div>
                 <div style={{ fontSize: 12, color: COLORS.muted }}>
                   Stok: <span style={{ fontFamily: "JetBrains Mono", color: COLORS.ink }}>{rm.stock.toLocaleString("id-ID")} {base?.symbol}</span> · Beli dalam {purchase?.name || "?"} · Min: {rm.minAlert} {base?.symbol} {sup ? `· ${sup.name}` : ""}
+                </div>
+                <div style={{ fontSize: 11.5, color: COLORS.muted, marginTop: 2 }}>
+                  Harga terakhir: <span style={{ fontFamily: "JetBrains Mono", color: (rm.lastPrice || 0) > 0 ? COLORS.ink : COLORS.alert }}>Rp{(rm.lastPrice || 0).toLocaleString("id-ID")}</span>/{purchase?.symbol || "satuan beli"}
                 </div>
                 {broken && <div style={{ fontSize: 11.5, color: COLORS.alert, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}><AlertTriangle size={12} />Satuan tidak valid — klik Edit untuk perbaiki</div>}
               </div>
@@ -1032,6 +1052,7 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
         </Field>
         <Field label="Stok awal"><input style={{ ...inputStyle, width: 100 }} type="number" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} /></Field>
         <Field label="Min. stok"><input style={{ ...inputStyle, width: 100 }} type="number" value={form.minAlert} onChange={(e) => setForm({ ...form, minAlert: e.target.value })} /></Field>
+        <Field label="Harga awal / satuan beli (opsional)"><input style={{ ...inputStyle, width: 140 }} type="number" placeholder="mis. 12000" value={form.initialPrice} onChange={(e) => setForm({ ...form, initialPrice: e.target.value })} /></Field>
         <Field label="Supplier">
           <select style={inputStyle} value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })}>
             <option value="">-</option>
@@ -1047,6 +1068,8 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
 function SuppliersPanel({ data, setData, role, showToast }) {
   const isSuperAdmin = role === "super_admin";
   const [form, setForm] = useState({ name: "", phone: "", contactPerson: "", address: "" });
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
 
   function add() {
     if (!form.name) return showToast("Nama supplier wajib diisi", true);
@@ -1060,21 +1083,52 @@ function SuppliersPanel({ data, setData, role, showToast }) {
     if (used) return showToast("Supplier dipakai bahan baku, tidak bisa dihapus", true);
     setData({ ...data, suppliers: data.suppliers.filter((s) => s.id !== id) });
   }
+  function startEdit(s) {
+    setEditingId(s.id);
+    setEditForm({ name: s.name, phone: s.phone || "", contactPerson: s.contactPerson || "", address: s.address || "" });
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditForm(null);
+  }
+  function saveEdit(id) {
+    if (!editForm.name) return showToast("Nama supplier wajib diisi", true);
+    setData({ ...data, suppliers: data.suppliers.map((s) => (s.id === id ? { ...s, name: editForm.name, phone: editForm.phone, contactPerson: editForm.contactPerson, address: editForm.address } : s)) });
+    cancelEdit();
+    showToast("Supplier diperbarui");
+  }
 
   return (
     <div>
       <SectionTitle>List Supplier</SectionTitle>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
-        {data.suppliers.map((s) => (
-          <div key={s.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{s.name}</div>
-              <div style={{ fontSize: 12, color: COLORS.muted }}>{s.contactPerson ? `${s.contactPerson} · ` : ""}{s.phone || "-"}</div>
-              {s.address && <div style={{ fontSize: 11.5, color: COLORS.muted }}>{s.address}</div>}
+        {data.suppliers.map((s) => {
+          if (editingId === s.id) {
+            return (
+              <div key={s.id} style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.crimson}`, borderRadius: 8, padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+                <Field label="Nama supplier"><input style={inputStyle} value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></Field>
+                <Field label="Kontak person"><input style={inputStyle} value={editForm.contactPerson} onChange={(e) => setEditForm({ ...editForm, contactPerson: e.target.value })} placeholder="mis. Bpk. Denny" /></Field>
+                <Field label="Telepon"><input style={inputStyle} value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} /></Field>
+                <Field label="Alamat"><input style={inputStyle} value={editForm.address} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} /></Field>
+                <button style={btnPrimary} onClick={() => saveEdit(s.id)}><Save size={14} />Simpan</button>
+                <button style={btnGhost} onClick={cancelEdit}><X size={14} />Batal</button>
+              </div>
+            );
+          }
+          return (
+            <div key={s.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{s.name}</div>
+                <div style={{ fontSize: 12, color: COLORS.muted }}>{s.contactPerson ? `${s.contactPerson} · ` : ""}{s.phone || "-"}</div>
+                {s.address && <div style={{ fontSize: 11.5, color: COLORS.muted }}>{s.address}</div>}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => startEdit(s)} style={btnGhost}>Edit</button>
+                {isSuperAdmin && <button onClick={() => remove(s.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>}
+              </div>
             </div>
-            {isSuperAdmin && <button onClick={() => remove(s.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>}
-          </div>
-        ))}
+          );
+        })}
         {data.suppliers.length === 0 && <EmptyState text="Belum ada supplier." />}
       </div>
       <div style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
