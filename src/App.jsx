@@ -886,15 +886,42 @@ function UnitsPanel({ data, setData, role, showToast }) {
 
 function MaterialsPanel({ data, setData, unitById, role, logAction, showToast }) {
   const isSuperAdmin = role === "super_admin";
-  const emptyForm = { code: "", name: "", baseUnitId: "gram", purchaseUnitId: "kg", stock: "", minAlert: "", supplierId: "" };
-  const [form, setForm] = useState(emptyForm);
+  const baseUnitsAll = data.units.filter((u) => u.toBase === 1);
+  function freshForm() {
+    return { code: "", name: "", baseUnitId: baseUnitsAll[0]?.id || "", purchaseUnitId: data.units[0]?.id || "", stock: "", minAlert: "", supplierId: "" };
+  }
+  const [form, setForm] = useState(freshForm);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
 
   function addMaterial() {
     if (!form.code || !form.name || !form.stock) return showToast("Lengkapi kode, nama, dan stok awal", true);
+    if (!unitById(form.baseUnitId)) return showToast("Satuan dasar tidak valid, pilih ulang dari dropdown", true);
+    if (!unitById(form.purchaseUnitId)) return showToast("Satuan beli tidak valid, pilih ulang dari dropdown", true);
     const rm = { id: uid("rm"), code: form.code, name: form.name, baseUnitId: form.baseUnitId, purchaseUnitId: form.purchaseUnitId, stock: parseFloat(form.stock) || 0, minAlert: parseFloat(form.minAlert) || 0, supplierId: form.supplierId || null, lastPrice: 0, priceHistory: [] };
     setData({ ...data, rawMaterials: [...data.rawMaterials, rm] });
-    setForm(emptyForm);
+    setForm(freshForm());
     showToast("Bahan baku ditambahkan");
+  }
+
+  function startEdit(rm) {
+    setEditingId(rm.id);
+    setEditForm({ code: rm.code, name: rm.name, baseUnitId: unitById(rm.baseUnitId) ? rm.baseUnitId : (baseUnitsAll[0]?.id || ""), purchaseUnitId: unitById(rm.purchaseUnitId) ? rm.purchaseUnitId : (data.units[0]?.id || ""), minAlert: rm.minAlert, supplierId: rm.supplierId || "" });
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditForm(null);
+  }
+  function saveEdit(id) {
+    if (!editForm.code || !editForm.name) return showToast("Kode dan nama wajib diisi", true);
+    if (!unitById(editForm.baseUnitId)) return showToast("Satuan dasar tidak valid, pilih ulang dari dropdown", true);
+    if (!unitById(editForm.purchaseUnitId)) return showToast("Satuan beli tidak valid, pilih ulang dari dropdown", true);
+    setData({
+      ...data,
+      rawMaterials: data.rawMaterials.map((r) => (r.id === id ? { ...r, code: editForm.code, name: editForm.name, baseUnitId: editForm.baseUnitId, purchaseUnitId: editForm.purchaseUnitId, minAlert: parseFloat(editForm.minAlert) || 0, supplierId: editForm.supplierId || null } : r)),
+    });
+    cancelEdit();
+    showToast("Bahan baku diperbarui");
   }
 
   function removeMaterial(id) {
@@ -941,15 +968,49 @@ function MaterialsPanel({ data, setData, unitById, role, logAction, showToast })
           const base = unitById(rm.baseUnitId);
           const purchase = unitById(rm.purchaseUnitId);
           const sup = data.suppliers.find((s) => s.id === rm.supplierId);
+          const broken = !base || !purchase;
+          if (editingId === rm.id) {
+            return (
+              <div key={rm.id} style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.crimson}`, borderRadius: 8, padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+                <Field label="Kode"><input style={{ ...inputStyle, width: 90 }} value={editForm.code} onChange={(e) => setEditForm({ ...editForm, code: e.target.value })} /></Field>
+                <Field label="Nama"><input style={{ ...inputStyle, width: 150 }} value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></Field>
+                <Field label="Satuan dasar (stok)">
+                  <select style={inputStyle} value={editForm.baseUnitId} onChange={(e) => setEditForm({ ...editForm, baseUnitId: e.target.value })}>
+                    <option value="">- pilih -</option>
+                    {baseUnitsAll.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Satuan beli">
+                  <select style={inputStyle} value={editForm.purchaseUnitId} onChange={(e) => setEditForm({ ...editForm, purchaseUnitId: e.target.value })}>
+                    <option value="">- pilih -</option>
+                    {data.units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Min. stok"><input style={{ ...inputStyle, width: 90 }} type="number" value={editForm.minAlert} onChange={(e) => setEditForm({ ...editForm, minAlert: e.target.value })} /></Field>
+                <Field label="Supplier">
+                  <select style={inputStyle} value={editForm.supplierId} onChange={(e) => setEditForm({ ...editForm, supplierId: e.target.value })}>
+                    <option value="">-</option>
+                    {data.suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </Field>
+                <button style={btnPrimary} onClick={() => saveEdit(rm.id)}><Save size={14} />Simpan</button>
+                <button style={btnGhost} onClick={cancelEdit}><X size={14} />Batal</button>
+              </div>
+            );
+          }
           return (
-            <div key={rm.id} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div key={rm.id} style={{ background: COLORS.panel, border: `1px solid ${broken ? COLORS.alert : COLORS.border}`, borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontFamily: "Anton", fontWeight: 600, fontSize: 16 }}>{rm.name} <span style={{ color: COLORS.muted, fontSize: 12 }}>({rm.code})</span></div>
                 <div style={{ fontSize: 12, color: COLORS.muted }}>
-                  Stok: <span style={{ fontFamily: "JetBrains Mono", color: COLORS.ink }}>{rm.stock.toLocaleString("id-ID")} {base?.symbol}</span> · Beli dalam {purchase?.name} · Min: {rm.minAlert} {base?.symbol} {sup ? `· ${sup.name}` : ""}
+                  Stok: <span style={{ fontFamily: "JetBrains Mono", color: COLORS.ink }}>{rm.stock.toLocaleString("id-ID")} {base?.symbol}</span> · Beli dalam {purchase?.name || "?"} · Min: {rm.minAlert} {base?.symbol} {sup ? `· ${sup.name}` : ""}
                 </div>
+                {broken && <div style={{ fontSize: 11.5, color: COLORS.alert, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}><AlertTriangle size={12} />Satuan tidak valid — klik Edit untuk perbaiki</div>}
               </div>
-              {isSuperAdmin && <button onClick={() => removeMaterial(rm.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>}
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => startEdit(rm)} style={btnGhost}>Edit</button>
+                {isSuperAdmin && <button onClick={() => removeMaterial(rm.id)} style={btnGhost}><Trash2 size={14} />Hapus</button>}
+              </div>
             </div>
           );
         })}
